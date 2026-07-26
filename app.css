@@ -57,6 +57,31 @@ a { color: var(--blue); text-decoration: none; }
 .login-card h1 { font-size: 20px; margin-bottom: 4px; }
 .login-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 
+/* ---------- شاشة إجبار تفعيل اللوكيشن ---------- */
+.gate {
+  min-height: 100vh; display: flex; flex-direction: column; justify-content: flex-start;
+  padding: calc(34px + env(safe-area-inset-top)) 22px calc(28px + env(safe-area-inset-bottom));
+  max-width: 480px; margin: 0 auto; text-align: center;
+}
+.gate-icon {
+  font-size: 46px; width: 88px; height: 88px; margin: 0 auto 14px;
+  background: var(--red-soft); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.gate h1 { font-size: 20px; color: var(--red); margin-bottom: 8px; }
+.gate > p { color: var(--muted); font-size: 14.5px; margin-bottom: 16px; }
+.gate-steps {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 15px 17px; text-align: right; font-size: 13.5px; margin-bottom: 18px;
+}
+.gate-steps > b { display: block; margin: 12px 0 6px; color: var(--navy); font-size: 14px; }
+.gate-steps > b:first-child { margin-top: 0; }
+.gate-steps li b { color: var(--navy); }
+.gate-steps ol { padding-inline-start: 22px; list-style: decimal outside; color: var(--text); }
+.gate-steps li { margin-bottom: 5px; padding-inline-start: 2px; }
+.gate-steps li::marker { color: var(--blue); font-weight: 700; }
+.gate-note { font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+
 /* ---------- الأزرار ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
@@ -89,6 +114,8 @@ a { color: var(--blue); text-decoration: none; }
 }
 body.is-offline .offline-badge { display: inline-block; }
 .pending-badge { background: #fff3; font-size: 11.5px; padding: 3px 10px; border-radius: 20px; }
+.track-dot { font-size: 11px; animation: pulse 2.2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 .page { padding: 14px 14px 90px; max-width: 640px; margin: 0 auto; }
 .admin .page { max-width: 1100px; padding-bottom: 30px; }

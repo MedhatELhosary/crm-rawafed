@@ -1,5 +1,5 @@
 // Service Worker — بيخلي التطبيق يفتح بدون نت
-const CACHE = 'crm-rawafed-v8';
+const CACHE = 'crm-rawafed-v11';
 const SHELL = [
   './',
   './index.html',

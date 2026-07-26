@@ -187,6 +187,7 @@ A.mapConfirm = () => {
 
 // ================== الدخول والخروج ==================
 function doLogout() {
+  stopTracking(true);
   ['crm_token', 'crm_user', 'crm_creds', 'crm_boot', 'crm_live_visit'].forEach(k => localStorage.removeItem(k));
   S.token = ''; S.user = null; S.data = null; S.liveVisit = null;
   render();
@@ -205,7 +206,9 @@ A.login = async () => {
     save('crm_user', S.user); save('crm_creds', S.creds);
     S.tab = 'today'; S.adminTab = 'dash';
     render();
-    refresh();
+    await refresh();
+    if (S.user.role === 'rep') await checkGpsPermission();
+    ensureTracking(true);
   } catch (e) {
     toast(e.msg || e.fatal || (e.offline ? 'مفيش نت — جرب تاني' : 'حصل خطأ'), 'err');
     btn.disabled = false; btn.textContent = 'دخول';
@@ -218,6 +221,7 @@ function render() {
   document.body.classList.toggle('is-offline', !navigator.onLine);
   if (!S.token || !S.user) { app.innerHTML = viewLogin(); return; }
   document.body.classList.toggle('admin', S.user.role === 'admin');
+  if (gpsBlocked()) { app.innerHTML = viewGpsGate(); return; }
   app.innerHTML = S.user.role === 'admin' ? viewAdmin() : viewRep();
 }
 
@@ -236,6 +240,34 @@ function viewLogin() {
   </div>`;
 }
 
+/** شاشة إجبارية: التطبيق مبيشتغلش من غير إذن الموقع */
+function viewGpsGate() {
+  const noSupport = !navigator.geolocation;
+  return `<div class="gate">
+    <div class="gate-icon">📍</div>
+    <h1>${noSupport ? 'الجهاز مش بيدعم تحديد الموقع' : 'لازم تفعّل الوصول للموقع'}</h1>
+    <p>التطبيق مش هيشتغل من غير اللوكيشن، لأن تسجيل الزيارات وخط السير بيعتمدوا عليه.</p>
+    ${noSupport ? '' : `
+    <div class="gate-steps">
+      <b>على أندرويد (Chrome):</b>
+      <ol>
+        <li>افتح <b>إعدادات الموبايل</b> ← <b>الموقع (Location)</b> وشغّله</li>
+        <li>ارجع للتطبيق واضغط على 🔒 أو ⓘ جنب العنوان فوق</li>
+        <li>اختار <b>أذونات الموقع</b> ← <b>السماح</b></li>
+        <li>اقفل التطبيق وافتحه تاني</li>
+      </ol>
+      <b>على آيفون (Safari):</b>
+      <ol>
+        <li><b>الإعدادات</b> ← <b>الخصوصية</b> ← <b>خدمات الموقع</b> ← شغّلها</li>
+        <li>انزل لـ <b>Safari</b> واختار <b>أثناء استخدام التطبيق</b></li>
+      </ol>
+    </div>`}
+    <button class="btn full" onclick="A.recheckGps()">🔄 فعّلته — افحص تاني</button>
+    <button class="btn outline full mt" onclick="A.logout()">تسجيل خروج</button>
+    <p class="gate-note">لو المشكلة مستمرة كلم الإدارة.</p>
+  </div>`;
+}
+
 function topbar(subtitle) {
   return `<div class="topbar">
     <div class="flex" style="flex:1;gap:10px">
@@ -243,13 +275,14 @@ function topbar(subtitle) {
       <div style="flex:1"><div class="title">${esc(companyName())}</div><div class="sub">${esc(subtitle)}</div></div>
     </div>
     <div class="flex" style="flex:none">
+      ${(S.user && S.user.role === 'rep' && TRK.watchId !== null) ? '<span class="track-dot" title="تتبع خط السير شغال">🟢</span>' : ''}
       ${S.queue.length ? '<span class="pending-badge">⏳ ' + S.queue.length + ' معلقة</span>' : ''}
       <span class="offline-badge">أوفلاين</span>
       <button class="btn sm ghost" onclick="A.doRefresh()" ${S.loading ? 'disabled' : ''}>${S.loading ? '⏳' : '🔄'}</button>
     </div>
   </div>`;
 }
-A.doRefresh = () => { qflush(); refresh(); };
+A.doRefresh = () => { qflush(); flushTrack(); ensureTracking(true); refresh(); };
 
 // ================== واجهة المندوب ==================
 function viewRep() {
@@ -259,8 +292,11 @@ function viewRep() {
     ['notifs', '🔔', 'تنبيهات'], ['me', '👤', 'حسابي']
   ];
   let body = '';
-  if (!S.data) body = '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
-  else if (S.tab === 'today') body = viewToday();
+  if (TRK.failCount > 0 && TRK.failCount < 3) body += `<div class="card" style="border-right:4px solid var(--amber)">
+    <b>⚠️ مش قادر أقرا موقعك</b>
+    <p class="muted">اتأكد إن الـ GPS مفتوح وإنك مش في مكان مغلق. لو فضل كده التطبيق هيقف.</p></div>`;
+  if (!S.data) body += '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
+  else if (S.tab === 'today') body += viewToday();
   else if (S.tab === 'customers') body = viewCustomers();
   else if (S.tab === 'leads') body = viewLeads();
   else if (S.tab === 'notifs') body = viewNotifs();
@@ -416,6 +452,7 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
 
 async function doCheckin(c, pos) {
   const nowTime = new Date().toTimeString().slice(0, 5);
+  if (pos) pushTrackPoint(pos.lat, pos.lng, pos.acc, 'وصول: ' + c.name);
   const payload = { customer_id: c.id, lat: pos ? pos.lat : '', lng: pos ? pos.lng : '' };
   try {
     const res = await api('checkin', payload);
@@ -471,6 +508,7 @@ A.checkoutSave = async () => {
     report: $('#v-report').value.trim(), next_action: $('#v-next').value.trim(), next_action_date: $('#v-next-date').value
   };
   const outTime = new Date().toTimeString().slice(0, 5);
+  if (S.myPos) pushTrackPoint(S.myPos.lat, S.myPos.lng, S.myPos.acc, 'انصراف: ' + (c ? c.name : ''));
   closeModal();
   try {
     if (lv.local || !lv.visit_id) throw { offline: true };
@@ -719,6 +757,15 @@ function viewMe() {
         ${k.collectionTarget ? '<div class="bar"><i style="width:' + Math.min(100, k.collectedMonth / k.collectionTarget * 100) + '%"></i></div>' : ''}</div>
     </div>
     <div class="card">
+      <h3>📍 تتبع خط السير</h3>
+      <div class="stat-line"><span>الحالة</span>
+        <b>${TRK.denied ? '<span style="color:var(--red)">⚠️ إذن الموقع مرفوض</span>'
+          : TRK.watchId !== null ? '<span style="color:var(--green)">🟢 شغال</span>'
+          : '<span style="color:var(--muted)">بيشتغل أول ما تتحرك</span>'}</b></div>
+      ${TRK.buf.length ? '<div class="stat-line"><span>نقاط مستنية الرفع</span><b>' + TRK.buf.length + '</b></div>' : ''}
+      <p class="muted mt">خط سيرك بيتسجل تلقائيًا أثناء استخدامك للتطبيق عشان تتحسب مسافاتك وتغطيتك في تقرير اليوم.</p>
+    </div>
+    <div class="card">
       <h3>📲 بوت تليجرام</h3>
       <p class="muted">عشان توصلك خطة يومك كل صبح: افتح البوت وابعتله<br><b>/start ${esc(S.creds ? S.creds.username : '')}</b></p>
     </div>
@@ -730,14 +777,14 @@ function viewMe() {
 // ================== واجهة الأدمن ==================
 function viewAdmin() {
   const tabs = [
-    ['dash', '📊 اللوحة'], ['customers', '👥 العملاء'], ['team', '🧑‍💼 المناديب والمناطق'],
-    ['leads', '🎯 الليدز'], ['entries', '📒 القيود اليومية'], ['targets', '🏁 الأهداف'],
-    ['reports', '📄 التقارير'], ['settings', '⚙️ الإعدادات']
+    ['dash', '📊 اللوحة'], ['daily', '📍 التقرير اليومي'], ['customers', '👥 العملاء'],
+    ['team', '🧑‍💼 المناديب والمناطق'], ['leads', '🎯 الليدز'], ['entries', '📒 القيود اليومية'],
+    ['targets', '🏁 الأهداف'], ['reports', '📄 التقارير'], ['settings', '⚙️ الإعدادات']
   ];
   let body = '';
   if (!S.data) body = '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
   else body = {
-    dash: adDash, customers: adCustomers, team: adTeam, leads: adLeads, entries: adEntries,
+    dash: adDash, daily: adDaily, customers: adCustomers, team: adTeam, leads: adLeads, entries: adEntries,
     targets: adTargets, reports: adReports, settings: adSettings
   }[S.adminTab]();
   return topbar('لوحة تحكم الأدمن') +
@@ -823,6 +870,134 @@ function adDash() {
       </tr>`).join('') || '<tr><td colspan="6" class="muted">لسه مفيش زيارات</td></tr>'}
     </table></div>`;
 }
+
+// ----- التقرير اليومي وخطوط السير -----
+function adDaily() {
+  const date = S.dailyDate || new Date().toISOString().slice(0, 10);
+  const rep = S.daily;
+  return `
+    <div class="card">
+      <div class="flex">
+        <div><label>تاريخ التقرير</label><input type="date" id="dr-date" value="${esc(date)}" max="${new Date().toISOString().slice(0, 10)}"></div>
+        <div style="flex:none;align-self:flex-end"><button class="btn" onclick="A.loadDaily()">عرض التقرير</button></div>
+        <div style="flex:none;align-self:flex-end"><button class="btn ghost" onclick="A.loadDaily(-1)">← اليوم اللي فات</button></div>
+      </div>
+    </div>
+    ${!rep ? '<div class="empty"><div class="big">📍</div>اختار التاريخ واضغط "عرض التقرير"</div>' : `
+      ${rep.trackingEnabled ? '' : '<div class="card" style="border-right:4px solid var(--amber)">⚠️ تتبع خطوط السير مقفول من الإعدادات — الزيارات بتتسجل عادي بس المسافات مش هتظهر.</div>'}
+      <div class="section-title"><span>ملخص يوم ${esc(rep.dayName)} — ${esc(rep.date)}</span></div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">${rep.totals.visitsDone}</div><div class="lbl">زيارة منفذة</div></div>
+        <div class="kpi"><div class="num">${rep.totals.plannedDone}/${rep.totals.plannedCount}</div><div class="lbl">تغطية خط السير</div>
+          ${rep.totals.plannedCount ? '<div class="bar"><i style="width:' + Math.round(rep.totals.plannedDone / rep.totals.plannedCount * 100) + '%"></i></div>' : ''}</div>
+        <div class="kpi"><div class="num">${rep.totals.distanceKm}</div><div class="lbl">كم مقطوعة</div></div>
+        <div class="kpi"><div class="num">${rep.totals.activeReps}/${rep.totals.totalReps}</div><div class="lbl">مندوب نشط</div></div>
+      </div>
+      <div class="table-wrap"><table>
+        <tr><th>المندوب</th><th>الزيارات</th><th>خط السير</th><th>التغطية</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
+        ${rep.reps.map(r => `<tr>
+          <td><b>${esc(r.rep_name)}</b></td>
+          <td>${r.visitsDone}${r.visits > r.visitsDone ? ' <span class="muted">(+' + (r.visits - r.visitsDone) + ' مش تمت)</span>' : ''}</td>
+          <td>${r.plannedDone} من ${r.plannedCount}</td>
+          <td>${r.coverage === null ? '—' : '<span class="badge ' + (r.coverage >= 80 ? 'cool' : r.coverage >= 50 ? 'warm' : 'hot') + '">' + r.coverage + '%</span>'}</td>
+          <td>${r.offPlan || '—'}</td>
+          <td>${r.distanceKm ? r.distanceKm + ' كم' : (r.visitsDone && !r.points ? '<span class="badge warm">مفيش تتبع</span>' : '<span class="muted">—</span>')}</td>
+          <td>${esc(r.firstTime || '—')}</td>
+          <td>${esc(r.lastTime || '—')}</td>
+          <td>${r.workMins ? Math.floor(r.workMins / 60) + ':' + String(r.workMins % 60).padStart(2, '0') : '—'}</td>
+          <td>${r.avgVisitMin ? r.avgVisitMin + ' د' : '—'}</td>
+          <td>${(r.trail.length || r.visitMarkers.length) ? `<button class="btn sm ghost" onclick="A.showTrail('${r.rep_id}')">🗺️ خط سيره</button>` : '<span class="muted">مفيش تتبع</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="11" class="muted">مفيش مناديب</td></tr>'}
+      </table></div>
+      ${rep.reps.filter(r => r.missed.length).map(r => `
+        <div class="card">
+          <h3>⚠️ عملاء ${esc(r.rep_name)} اللي متزاروش (${r.missed.length})</h3>
+          <div class="muted">${r.missed.map(esc).join(' • ')}</div>
+        </div>`).join('')}
+      <button class="btn ghost full" onclick="A.exportDaily()">⬇️ تنزيل التقرير Excel</button>
+    `}`;
+}
+
+A.loadDaily = async (offset) => {
+  let date = ($('#dr-date') || {}).value || new Date().toISOString().slice(0, 10);
+  if (offset) {
+    const d = new Date(date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + offset);
+    date = d.toISOString().slice(0, 10);
+  }
+  S.dailyDate = date;
+  toast('⏳ بجهز تقرير ' + date);
+  try {
+    const res = await api('dailyReport', { date: date });
+    S.daily = res.report;
+    render();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.showTrail = (repId) => {
+  const r = (S.daily.reps || []).find(x => String(x.rep_id) === String(repId));
+  if (!r) return;
+  openModal(`
+    <h2>🗺️ خط سير ${esc(r.rep_name)}</h2>
+    <p class="modal-sub">${esc(S.daily.date)} — ${r.distanceKm} كم، ${r.visitsDone} زيارة، ${r.points} نقطة تتبع</p>
+    <div id="map-pick"></div>
+    <div class="muted mt">— خط أزرق متصل: تحرك متتبع • - - خط رمادي متقطع: فجوة (التطبيق كان مقفول) • 🟢 بداية اليوم • 🔴 آخر نقطة • 📍 زيارات</div>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, () => {
+    const map = L.map('map-pick');
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+    const pts = r.trail.map(p => [p[0], p[1]]);
+    const bounds = [];
+    const mins = t => { const p = String(t || '').split(':'); return (+p[0] || 0) * 60 + (+p[1] || 0); };
+    if (pts.length > 1) {
+      // المسار المتصل بيتقسم: خط متصل للتحرك المتتبع، ومتقطع للفجوات (التطبيق كان مقفول)
+      for (let i = 1; i < r.trail.length; i++) {
+        const gap = mins(r.trail[i][2]) - mins(r.trail[i - 1][2]);
+        const seg = [pts[i - 1], pts[i]];
+        if (gap > 25) {
+          L.polyline(seg, { color: '#94a3b8', weight: 3, opacity: .8, dashArray: '7,7' }).addTo(map)
+            .bindPopup('فجوة ' + gap + ' دقيقة — التطبيق كان مقفول');
+        } else {
+          L.polyline(seg, { color: '#2f6fed', weight: 4, opacity: .8 }).addTo(map);
+        }
+      }
+      L.circleMarker(pts[0], { radius: 7, color: '#16a34a', fillColor: '#16a34a', fillOpacity: 1 })
+        .addTo(map).bindPopup('البداية ' + esc(r.trail[0][2]));
+      L.circleMarker(pts[pts.length - 1], { radius: 7, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 1 })
+        .addTo(map).bindPopup('آخر نقطة ' + esc(r.trail[r.trail.length - 1][2]));
+    }
+    // نقاط التتبع نفسها
+    r.trail.forEach((p, i) => {
+      if (i === 0 || i === r.trail.length - 1) return;
+      L.circleMarker([p[0], p[1]], { radius: 3, color: '#2f6fed', fillColor: '#2f6fed', fillOpacity: .9, weight: 1 })
+        .addTo(map).bindPopup(esc(p[2]));
+    });
+    pts.forEach(p => bounds.push(p));
+    r.visitMarkers.forEach(v => {
+      const color = v.status === 'تمت' ? '#16a34a' : '#dc2626';
+      L.marker([v.lat, v.lng]).addTo(map)
+        .bindPopup('<b>' + esc(v.name) + '</b><br>' + esc(v.time || '') + ' — ' + esc(v.status) +
+          (v.distance_m !== '' && v.distance_m != null ? '<br>على بعد ' + v.distance_m + ' م من العميل' : ''));
+      L.circleMarker([v.lat, v.lng], { radius: 10, color: color, fill: false, weight: 3 }).addTo(map);
+      bounds.push([v.lat, v.lng]);
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding: [25, 25] });
+    else map.setView([24.7136, 46.6753], 11);
+    setTimeout(() => map.invalidateSize(), 250);
+    return () => map.remove();
+  });
+};
+
+A.exportDaily = () => {
+  const rows = (S.daily.reps || []).map(r => ({
+    'التاريخ': S.daily.date, 'المندوب': r.rep_name, 'زيارات منفذة': r.visitsDone,
+    'إجمالي الزيارات': r.visits, 'عملاء الخطة': r.plannedCount, 'اتزاروا من الخطة': r.plannedDone,
+    'نسبة التغطية %': r.coverage === null ? '' : r.coverage, 'زيارات خارج الخطة': r.offPlan,
+    'المسافة كم': r.distanceKm, 'أول تحرك': r.firstTime, 'آخر تحرك': r.lastTime,
+    'دقائق العمل': r.workMins, 'متوسط الزيارة دقيقة': r.avgVisitMin,
+    'عملاء متزاروش': r.missed.join(' | ')
+  }));
+  downloadCsv('التقرير_اليومي_' + S.daily.date, rows);
+};
 
 // ----- إدارة العملاء -----
 function adCustomers() {
@@ -1387,6 +1562,17 @@ function adSettings() {
       </div>
     </div>
     <div class="card">
+      <h3>📍 تتبع خطوط السير</h3>
+      <label><input type="checkbox" id="s-track" ${String(s.TRACK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? 'checked' : ''} style="width:auto"> تفعيل تتبع خط سير المناديب</label>
+      <p class="muted">التتبع إلزامي للمناديب — مفيش عندهم أي زرار لإيقافه، وبيتقفل من هنا بس.</p>
+      <div class="grid2">
+        <div><label>أقل فاصل بين نقطتين (دقيقة)</label><input id="s-track-min" type="number" value="${esc(s.TRACK_MIN_MINUTES || 3)}"></div>
+        <div><label>أقل مسافة تحرك (متر)</label><input id="s-track-m" type="number" value="${esc(s.TRACK_MIN_METERS || 120)}"></div>
+      </div>
+      <div><label>مدة الاحتفاظ بنقاط التتبع (يوم)</label><input id="s-track-keep" type="number" value="${esc(s.TRACK_KEEP_DAYS || 45)}"></div>
+      <p class="muted mt">التتبع بيشتغل على موبايل المندوب والتطبيق مفتوح. النقاط الأقدم من المدة دي بتتمسح تلقائيًا عشان الشيت ميكبرش.</p>
+    </div>
+    <div class="card">
       <h3>⚙️ قواعد الشغل</h3>
       <div class="grid2">
         <div><label>نطاق تأكيد الوصول (متر)</label><input id="s-geo" type="number" value="${esc(s.GEOFENCE_METERS || 150)}"></div>
@@ -1409,7 +1595,10 @@ A.saveSettings = async () => {
     QOYOD_API_KEY: $('#s-qoyod').value.trim(), TELEGRAM_BOT_TOKEN: $('#s-tg').value.trim(),
     GEOFENCE_METERS: $('#s-geo').value, VISIT_GAP_DAYS: $('#s-gap').value,
     OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim(),
-    CURRENCY: $('#s-currency').value, PAYMENT_TERMS_DAYS: $('#s-terms').value
+    CURRENCY: $('#s-currency').value, PAYMENT_TERMS_DAYS: $('#s-terms').value,
+    TRACK_ENABLED: $('#s-track').checked ? 'TRUE' : 'FALSE',
+    TRACK_MIN_MINUTES: $('#s-track-min').value, TRACK_MIN_METERS: $('#s-track-m').value,
+    TRACK_KEEP_DAYS: $('#s-track-keep').value
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
@@ -1589,10 +1778,179 @@ A.copyDiag = (json) => {
   else toast('انسخه يدوي من الشاشة', 'err');
 };
 
+// ================== تتبع خط السير ==================
+/**
+ * بيسجل نقطة كل بضع دقايق أو لما المندوب يتحرك مسافة كافية، والتطبيق مفتوح.
+ * النقاط بتتخزن محليًا وبتترفع كل شوية — فلو النت قطع مفيش حاجة بتضيع.
+ */
+const TRK = {
+  watchId: null, last: null, buf: JSON.parse(localStorage.getItem('crm_track_buf') || '[]'),
+  wakeLock: null, timer: null, lastFlush: 0,
+  denied: false,      // الإذن مرفوض صراحةً
+  failCount: 0,       // محاولات فشلت ورا بعض (GPS مقفول مثلًا)
+  checked: false      // اتفحص الإذن ولا لسه
+};
+
+/** التطبيق بيتقفل في وش المندوب لو اللوكيشن مش شغال */
+function gpsBlocked() {
+  return !!(S.user && S.user.role === 'rep' && (TRK.denied || TRK.failCount >= 3 || !navigator.geolocation));
+}
+
+function trackSettings() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return {
+    enabled: String(s.TRACK_ENABLED || 'TRUE').toUpperCase() !== 'FALSE',
+    minMin: Number(s.TRACK_MIN_MINUTES) || 3,
+    minM: Number(s.TRACK_MIN_METERS) || 120
+  };
+}
+/** التتبع إلزامي لكل المناديب — بيتقفل من إعدادات الأدمن بس */
+function trackingOn() { return trackSettings().enabled; }
+
+/**
+ * بتتنادى في كل مرة يفتح فيها المندوب التطبيق أو يرجعله:
+ * بتاخد نقطة فورًا وبتشغّل المتابعة المستمرة طول ما التطبيق مفتوح.
+ */
+async function ensureTracking(silent) {
+  if (!S.user || S.user.role !== 'rep' || !S.token) return;
+  if (!trackingOn()) { stopTracking(true); return; }
+  if (!navigator.geolocation) return;
+
+  // نقطة فورية أول ما يفتح التطبيق — دي اللي بتوصل المسار
+  navigator.geolocation.getCurrentPosition(
+    p => { TRK.denied = false; onTrackPoint(p, true); },
+    err => handleTrackError(err),
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 120000 }
+  );
+
+  if (TRK.watchId === null) {
+    TRK.watchId = navigator.geolocation.watchPosition(
+      p => { TRK.denied = false; onTrackPoint(p); },
+      err => handleTrackError(err),
+      { enableHighAccuracy: true, maximumAge: 60000, timeout: 30000 }
+    );
+  }
+  // منع الشاشة تنام عشان التتبع يفضل شغال والتطبيق مفتوح
+  try { if ('wakeLock' in navigator && !TRK.wakeLock) TRK.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  if (!TRK.timer) TRK.timer = setInterval(flushTrack, 120000); // رفع كل دقيقتين
+}
+
+function handleTrackError(err) {
+  TRK.checked = true;
+  if (err && err.code === 1) {        // الإذن مرفوض
+    TRK.denied = true;
+    TRK.failCount = 99;
+  } else {                            // الـ GPS مقفول أو مش لاقي إشارة
+    TRK.failCount++;
+  }
+  render();
+}
+
+/** فحص إذن الموقع — بيتنادى أول ما المندوب يدخل ولما يضغط "افحص تاني" */
+async function checkGpsPermission() {
+  if (!S.user || S.user.role !== 'rep') return;
+  if (!navigator.geolocation) { TRK.checked = true; render(); return; }
+  // نتابع تغيير الإذن من إعدادات المتصفح لحظيًا
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const st = await navigator.permissions.query({ name: 'geolocation' });
+      if (st.state === 'denied') { TRK.denied = true; TRK.failCount = 99; }
+      else if (st.state === 'granted') { TRK.denied = false; TRK.failCount = 0; }
+      if (!st._crmBound) {
+        st._crmBound = true;
+        st.onchange = () => {
+          if (st.state === 'granted') { TRK.denied = false; TRK.failCount = 0; ensureTracking(true); }
+          else if (st.state === 'denied') { TRK.denied = true; TRK.failCount = 99; }
+          render();
+        };
+      }
+    }
+  } catch (e) {}
+  return new Promise(resolve => {
+    navigator.geolocation.getCurrentPosition(
+      p => { TRK.denied = false; TRK.failCount = 0; TRK.checked = true; onTrackPoint(p, true); render(); resolve(true); },
+      err => { handleTrackError(err); resolve(false); },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }
+    );
+  });
+}
+
+A.recheckGps = async () => {
+  toast('⏳ بفحص إذن الموقع...');
+  TRK.denied = false; TRK.failCount = 0;   // نبدأ من جديد
+  const ok = await checkGpsPermission();
+  if (ok) { toast('✅ تمام — اللوكيشن شغال', 'ok'); ensureTracking(true); }
+  else toast('لسه مش شغال — اتبع الخطوات وجرب تاني', 'err');
+};
+
+function stopTracking(silent) {
+  if (TRK.watchId !== null) { navigator.geolocation.clearWatch(TRK.watchId); TRK.watchId = null; }
+  if (TRK.timer) { clearInterval(TRK.timer); TRK.timer = null; }
+  if (TRK.wakeLock) { try { TRK.wakeLock.release(); } catch (e) {} TRK.wakeLock = null; }
+  flushTrack();
+}
+
+/** force = نقطة إجبارية عند فتح التطبيق (عشان المسار يفضل متوصل) */
+function onTrackPoint(pos, force) {
+  const cfg = trackSettings();
+  const lat = +pos.coords.latitude.toFixed(6), lng = +pos.coords.longitude.toFixed(6);
+  const acc = Math.round(pos.coords.accuracy || 0);
+  if (acc > 500) return; // دقة ضعيفة أوي
+  const now = Date.now();
+  S.myPos = { lat: lat, lng: lng, acc: acc };
+  if (TRK.last && !force) {
+    const mins = (now - TRK.last.t) / 60000;
+    const dist = distMeters(TRK.last.lat, TRK.last.lng, lat, lng);
+    if (mins < cfg.minMin && dist < cfg.minM) return;
+    if (dist < 30 && mins < cfg.minMin * 4) return; // واقف مكانه
+  }
+  // نقطة الفتح: منسجلهاش لو لسه سجلنا واحدة من أقل من دقيقة
+  if (force && TRK.last && (now - TRK.last.t) < 60000) return;
+  TRK.last = { lat: lat, lng: lng, t: now };
+  pushTrackPoint(lat, lng, acc, force ? 'فتح التطبيق' : 'auto');
+}
+
+function pushTrackPoint(lat, lng, acc, source) {
+  const d = new Date();
+  TRK.buf.push({
+    date: d.toISOString().slice(0, 10),
+    time: d.toTimeString().slice(0, 5),
+    lat: lat, lng: lng, acc: acc || 0, source: source || 'auto'
+  });
+  if (TRK.buf.length > 500) TRK.buf = TRK.buf.slice(-500);
+  localStorage.setItem('crm_track_buf', JSON.stringify(TRK.buf));
+  if (TRK.buf.length >= 5) flushTrack();
+}
+
+async function flushTrack() {
+  if (!TRK.buf.length || !S.token || !navigator.onLine) return;
+  if (Date.now() - TRK.lastFlush < 15000) return;
+  TRK.lastFlush = Date.now();
+  const batch = TRK.buf.slice(0, 120);
+  try {
+    await api('track', { points: batch });
+    TRK.buf = TRK.buf.slice(batch.length);
+    localStorage.setItem('crm_track_buf', JSON.stringify(TRK.buf));
+  } catch (e) { /* هنحاول تاني بعدين */ }
+}
+
 // ================== التشغيل ==================
-window.addEventListener('online', () => { document.body.classList.remove('is-offline'); qflush(); });
+window.addEventListener('online', () => { document.body.classList.remove('is-offline'); qflush(); flushTrack(); });
 window.addEventListener('offline', () => document.body.classList.add('is-offline'));
+// لما التطبيق يرجع للواجهة تاني — نرجّع قفل الشاشة ونرفع اللي اتجمع
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') { stopTracking(true); return; }
+  if (gpsBlocked()) { checkGpsPermission(); return; }
+  ensureTracking(true);   // نقطة جديدة كل ما يرجع للتطبيق — بيها بيتوصل المسار
+  flushTrack();
+});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 render();
-if (S.token) { qflush(); refresh(true); }
+if (S.token) {
+  qflush();
+  refresh(true).then(() => {
+    if (S.user && S.user.role === 'rep') checkGpsPermission();
+    ensureTracking(true);
+  });
+}
