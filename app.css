@@ -238,9 +238,28 @@ tr:last-child td { border-bottom: none; }
 #print-area { display: none; }
 .stmt { direction: rtl; font-family: 'Segoe UI', Tahoma, sans-serif; color: #111; background: #fff; padding: 4px; }
 .stmt-head { text-align: center; border-bottom: 3px solid #1e3a5f; padding-bottom: 10px; margin-bottom: 12px; }
+.stmt-logo { max-height: 70px; max-width: 200px; object-fit: contain; margin-bottom: 6px; }
 .stmt-company { font-size: 20px; font-weight: 800; color: #1e3a5f; }
 .stmt-title { font-size: 15px; font-weight: 700; margin-top: 2px; }
+.stmt-period { font-size: 12.5px; color: #555; margin-top: 3px; }
 .stmt-info { display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; font-size: 12.5px; margin-top: 8px; }
+.stmt-open td { background: #fff8e5 !important; font-weight: 700; }
+.stmt-sign { display: flex; justify-content: space-around; margin-top: 34px; font-size: 12.5px; color: #444; }
+.stmt-sign span { border-top: 1px solid #999; padding-top: 5px; min-width: 150px; text-align: center; }
+.stmt-preview { max-height: 48vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: #fff; }
+
+/* ---------- اللوجو ---------- */
+.logo-img { object-fit: contain; border-radius: 12px; background: #fff; padding: 3px; }
+.topbar-logo { flex: none; }
+.topbar .logo-circle { flex: none; box-shadow: none; }
+.logo-box { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+#logo-preview {
+  width: 92px; height: 92px; border: 1.5px dashed var(--border); border-radius: 12px;
+  display: flex; align-items: center; justify-content: center; background: #fff;
+  font-size: 12px; text-align: center; padding: 5px; flex: none;
+}
+#logo-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.logo-box > div:last-child { flex: 1; min-width: 200px; }
 .stmt-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .stmt-table th { background: #1e3a5f; color: #fff; padding: 7px 8px; text-align: right; border: 1px solid #1e3a5f; }
 .stmt-table td { padding: 6px 8px; border: 1px solid #c8d0dc; text-align: right; }
@@ -253,6 +272,9 @@ tr:last-child td { border-bottom: none; }
   #app, #modal-root, #toast-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
   #print-area { display: block !important; }
   body { background: #fff; }
+  /* عشان ألوان رأس الجدول واللوجو تطلع في الـ PDF مش أبيض وأسود */
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  .stmt-table tr { page-break-inside: avoid; }
   @page { size: A4; margin: 12mm; }
 }
 

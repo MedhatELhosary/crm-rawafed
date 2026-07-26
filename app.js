@@ -24,7 +24,27 @@ function todayDayIndex() { // السبت=1 ... الخميس=6، الجمعة=0
 }
 function dayLabel(i) { return ['—', 'السبت', 'الحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس'][Number(i)] || '—'; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function money(n) { n = Number(n) || 0; return n.toLocaleString('ar-EG', { maximumFractionDigits: 0 }); }
+function money(n) { n = Number(n) || 0; return n.toLocaleString('en-US', { maximumFractionDigits: 0 }); }
+/** العملة من إعدادات النظام — بتتخزن محليًا عشان تظهر حتى قبل تحميل البيانات */
+function cur() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return s.CURRENCY || localStorage.getItem('crm_currency') || 'ر.س';
+}
+function moneyC(n) { return money(n) + ' ' + cur(); }
+function logoSrc() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return s.COMPANY_LOGO || localStorage.getItem('crm_logo') || '';
+}
+function companyName() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return s.COMPANY_NAME || localStorage.getItem('crm_company') || 'CRM روافد';
+}
+/** بيرسم اللوجو لو مترفع، وإلا بيرجع دايرة فيها أول حرف من اسم الشركة */
+function logoHtml(size, cls) {
+  const src = logoSrc();
+  if (src) return `<img class="logo-img ${cls || ''}" style="width:${size}px;height:${size}px" src="${src}" alt="">`;
+  return `<div class="logo-circle ${cls || ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.48)}px;border-radius:${Math.round(size * 0.3)}px">${esc(companyName()[0] || 'ر')}</div>`;
+}
 function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
 // ================== الاتصال بالسيرفر ==================
@@ -75,6 +95,14 @@ async function refresh(silent) {
     const res = await api(action, {});
     S.data = res;
     save('crm_boot', res);
+    // تخزين هوية الشركة محليًا عشان تظهر في شاشة الدخول قبل تحميل البيانات
+    const st = res.settings || res.allSettings || {};
+    if (st.CURRENCY) localStorage.setItem('crm_currency', st.CURRENCY);
+    if (st.COMPANY_NAME) localStorage.setItem('crm_company', st.COMPANY_NAME);
+    if (st.COMPANY_LOGO !== undefined) {
+      if (st.COMPANY_LOGO) localStorage.setItem('crm_logo', st.COMPANY_LOGO);
+      else localStorage.removeItem('crm_logo');
+    }
   } catch (e) {
     if (!silent && !e.offline) toast(e.msg || e.fatal || 'مشكلة في التحديث', 'err');
     if (e.offline && !silent) toast('📴 مفيش نت — شغال بآخر بيانات محفوظة');
@@ -195,9 +223,9 @@ function render() {
 
 function viewLogin() {
   return `<div class="login-wrap">
-    <div class="logo-circle">ر</div>
+    ${logoHtml(86)}
     <div class="login-card">
-      <h1>CRM روافد</h1>
+      <h1>${esc(companyName())}</h1>
       <p class="sub">نظام إدارة الزيارات والعملاء والتحصيلات</p>
       <label>اسم المستخدم</label>
       <input id="login-user" autocomplete="username" placeholder="مثال: ahmed">
@@ -210,7 +238,10 @@ function viewLogin() {
 
 function topbar(subtitle) {
   return `<div class="topbar">
-    <div><div class="title">CRM روافد</div><div class="sub">${esc(subtitle)}</div></div>
+    <div class="flex" style="flex:1;gap:10px">
+      ${logoHtml(36, 'topbar-logo')}
+      <div style="flex:1"><div class="title">${esc(companyName())}</div><div class="sub">${esc(subtitle)}</div></div>
+    </div>
     <div class="flex" style="flex:none">
       ${S.queue.length ? '<span class="pending-badge">⏳ ' + S.queue.length + ' معلقة</span>' : ''}
       <span class="offline-badge">أوفلاين</span>
@@ -265,7 +296,7 @@ function custCard(c, showDay) {
       </div>
       ${priorityBadge(c)}
     </div>
-    ${Number(c.overdue) > 0 ? '<div class="mt"><span class="badge hot">💰 متأخرات ' + money(c.overdue) + ' ج</span></div>' : ''}
+    ${Number(c.overdue) > 0 ? '<div class="mt"><span class="badge hot">💰 متأخرات ' + moneyC(c.overdue) + '</span></div>' : ''}
     <div class="cust-actions">
       <button class="btn sm green" onclick="A.checkin('${c.id}')">✔ تسجيل وصول</button>
       <button class="btn sm ghost" onclick="A.custDetails('${c.id}')">التفاصيل</button>
@@ -505,10 +536,10 @@ A.custDetails = (id) => {
     ${priorityBadge(c)} ${c.priority_reasons ? '<div class="muted mt">' + esc(c.priority_reasons) + '</div>' : ''}
     <div class="card mt">
       <h3>💼 كشف الحساب (من قيود)</h3>
-      <div class="stat-line"><span>الرصيد الحالي</span><b class="${Number(c.balance) > 0 ? 'neg' : 'pos'}">${money(c.balance)} ج</b></div>
-      <div class="stat-line"><span>متأخرات مستحقة</span><b class="${Number(c.overdue) > 0 ? 'neg' : 'pos'}">${money(c.overdue)} ج</b></div>
-      <div class="stat-line"><span>مبيعات آخر 90 يوم</span><b>${money(c.sales_90d)} ج</b></div>
-      <div class="stat-line"><span>مرتجعات آخر 90 يوم</span><b>${money(c.returns_90d)} ج</b></div>
+      <div class="stat-line"><span>الرصيد الحالي</span><b class="${Number(c.balance) > 0 ? 'neg' : 'pos'}">${moneyC(c.balance)}</b></div>
+      <div class="stat-line"><span>متأخرات مستحقة</span><b class="${Number(c.overdue) > 0 ? 'neg' : 'pos'}">${moneyC(c.overdue)}</b></div>
+      <div class="stat-line"><span>مبيعات آخر 90 يوم</span><b>${moneyC(c.sales_90d)}</b></div>
+      <div class="stat-line"><span>مرتجعات آخر 90 يوم</span><b>${moneyC(c.returns_90d)}</b></div>
       <div class="stat-line"><span>آخر دفعة</span><b>${esc(c.last_payment_date || '—')}</b></div>
       <div class="stat-line"><span>آخر زيارة</span><b>${esc(c.last_visit_date || 'لم يُزر')}</b></div>
     </div>
@@ -683,7 +714,7 @@ function viewMe() {
     <div class="kpi-grid">
       <div class="kpi"><div class="num">${k.visitsMonth || 0}${k.visitsTarget ? ' / ' + k.visitsTarget : ''}</div><div class="lbl">زيارات الشهر</div>
         ${k.visitsTarget ? '<div class="bar"><i style="width:' + Math.min(100, k.visitsMonth / k.visitsTarget * 100) + '%"></i></div>' : ''}</div>
-      <div class="kpi"><div class="num">${money(k.collectedMonth)}</div><div class="lbl">تحصيل منطقتك الشهر (ج)</div>
+      <div class="kpi"><div class="num">${money(k.collectedMonth)}</div><div class="lbl">تحصيل منطقتك الشهر (${esc(cur())})</div>
         ${k.collectionTarget ? '<div class="bar"><i style="width:' + Math.min(100, k.collectedMonth / k.collectionTarget * 100) + '%"></i></div>' : ''}</div>
     </div>
     <div class="card">
@@ -749,8 +780,8 @@ function adDash() {
       <div class="kpi"><div class="num">${visitsMonth.length}</div><div class="lbl">زيارات الشهر</div></div>
       <div class="kpi"><div class="num">${coverage}%</div><div class="lbl">تغطية العملاء (30 يوم)</div>
         <div class="bar"><i style="width:${coverage}%"></i></div></div>
-      <div class="kpi"><div class="num" style="color:var(--red)">${money(totalOverdue)}</div><div class="lbl">إجمالي المتأخرات (ج)</div></div>
-      <div class="kpi"><div class="num" style="color:var(--green)">${money(collectedMonth)}</div><div class="lbl">تحصيلات الشهر (ج)</div></div>
+      <div class="kpi"><div class="num" style="color:var(--red)">${money(totalOverdue)}</div><div class="lbl">إجمالي المتأخرات (${esc(cur())})</div></div>
+      <div class="kpi"><div class="num" style="color:var(--green)">${money(collectedMonth)}</div><div class="lbl">تحصيلات الشهر (${esc(cur())})</div></div>
       <div class="kpi"><div class="num">${customers.length}</div><div class="lbl">إجمالي العملاء</div></div>
     </div>
     ${(noLoc || noRegion) ? `<div class="card" style="border-right:4px solid var(--amber)">
@@ -771,7 +802,7 @@ function adDash() {
       <tr><th>العميل</th><th>المنطقة</th><th>المتأخر</th><th>آخر دفعة</th><th>آخر زيارة</th></tr>
       ${topOverdue.map(c => `<tr>
         <td><b>${esc(c.name)}</b></td><td>${esc(regionName(c.region_id))}</td>
-        <td style="color:var(--red);font-weight:700">${money(c.overdue)} ج</td>
+        <td style="color:var(--red);font-weight:700">${moneyC(c.overdue)}</td>
         <td>${esc(c.last_payment_date || '—')}</td><td>${esc(c.last_visit_date || '—')}</td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">مفيش متأخرات — أو المزامنة مع قيود لسه</td></tr>'}
     </table></div>
@@ -1053,7 +1084,7 @@ function adEntries() {
         <div><label>نوع القيد</label><select id="e-type">
           <option value="مدين">مدين — على العميل (بيزوّد اللي عليه)</option>
           <option value="دائن">دائن — للعميل (بيقلل اللي عليه)</option></select></div>
-        <div><label>المبلغ (ج) *</label><input id="e-amount" type="number" inputmode="decimal" min="0"></div>
+        <div><label>المبلغ (${esc(cur())}) *</label><input id="e-amount" type="number" inputmode="decimal" min="0"></div>
       </div>
       <div class="grid2">
         <div><label>التاريخ</label><input id="e-date" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
@@ -1066,8 +1097,8 @@ function adEntries() {
       <tr><th>التاريخ</th><th>العميل</th><th>البيان</th><th>مدين</th><th>دائن</th><th></th></tr>
       ${entries.map(e => `<tr>
         <td>${esc(String(e.date).slice(0, 10))}</td><td><b>${esc(e.customer_name)}</b></td><td>${esc(e.description || '')}</td>
-        <td style="color:var(--red)">${e.type === 'مدين' ? money(e.amount) + ' ج' : '—'}</td>
-        <td style="color:var(--green)">${e.type === 'دائن' ? money(e.amount) + ' ج' : '—'}</td>
+        <td style="color:var(--red)">${e.type === 'مدين' ? moneyC(e.amount) : '—'}</td>
+        <td style="color:var(--green)">${e.type === 'دائن' ? moneyC(e.amount) : '—'}</td>
         <td><button class="btn sm red" onclick="A.delEntity('entry','${e.id}')">حذف</button></td>
       </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش قيود مسجلة لسه</td></tr>'}
     </table></div>`;
@@ -1088,52 +1119,106 @@ A.entrySave = async () => {
 };
 
 // ----- كشف حساب العميل (PDF) -----
-A.statement = async (custId) => {
+/** الخطوة الأولى: تحديد فترة الكشف */
+A.statement = (custId) => {
+  const c = custById(custId) || { name: '' };
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + '01';
+  openModal(`
+    <h2>📄 كشف حساب: ${esc(c.name)}</h2>
+    <p class="modal-sub">حدد الفترة اللي عاوز الكشف عنها — الحركات اللي قبلها هتظهر كرصيد افتتاحي.</p>
+    <div class="pill-row">
+      <button class="pill" onclick="A.stmtPeriod('all')">كل الفترة</button>
+      <button class="pill" onclick="A.stmtPeriod('month')">الشهر الحالي</button>
+      <button class="pill" onclick="A.stmtPeriod('q')">آخر 3 شهور</button>
+      <button class="pill" onclick="A.stmtPeriod('year')">من أول السنة</button>
+    </div>
+    <div class="grid2">
+      <div><label>من تاريخ</label><input id="st-from" type="date" value=""></div>
+      <div><label>إلى تاريخ</label><input id="st-to" type="date" value="${today}"></div>
+    </div>
+    <p class="muted mt">سيب "من تاريخ" فاضي عشان الكشف يبدأ من أول حركة للعميل.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="A.statementRun('${custId}')">اعرض الكشف ←</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+  A._stmtMonthStart = monthStart;
+};
+A.stmtPeriod = (kind) => {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  let from = '';
+  if (kind === 'month') from = today.slice(0, 8) + '01';
+  else if (kind === 'q') { const d = new Date(now.getFullYear(), now.getMonth() - 2, 1); from = d.toISOString().slice(0, 10); }
+  else if (kind === 'year') from = today.slice(0, 4) + '-01-01';
+  $('#st-from').value = from;
+  $('#st-to').value = today;
+};
+
+/** الخطوة الثانية: جلب الحركات وعرض الكشف جاهز للطباعة */
+A.statementRun = async (custId) => {
+  const fromEl = $('#st-from'), toEl = $('#st-to');
+  const from = fromEl ? fromEl.value : '', to = toEl ? toEl.value : '';
+  closeModal();
   toast('⏳ بجهز كشف الحساب...');
   try {
-    const r = await api('getStatement', { customer_id: custId });
-    let running = 0;
+    const r = await api('getStatement', { customer_id: custId, from: from, to: to });
+    const c$ = r.currency || cur();
+    let running = Number(r.opening) || 0;
     const rows = r.tx.map(t => {
       running += t.debit - t.credit;
       return { date: t.date, desc: t.desc, debit: t.debit, credit: t.credit, balance: running };
     });
     const totalDebit = r.tx.reduce((s, t) => s + t.debit, 0);
     const totalCredit = r.tx.reduce((s, t) => s + t.credit, 0);
+    const closing = (Number(r.opening) || 0) + totalDebit - totalCredit;
+    const periodTxt = (r.from || r.to)
+      ? 'من ' + (r.from || 'أول حركة') + ' إلى ' + (r.to || 'اليوم')
+      : 'كل الفترة';
+
     const stmtHtml = `
       <div class="stmt">
         <div class="stmt-head">
+          ${r.logo ? '<img class="stmt-logo" src="' + r.logo + '" alt="">' : ''}
           <div class="stmt-company">${esc(r.company)}</div>
           <div class="stmt-title">كشف حساب عميل</div>
+          <div class="stmt-period">${esc(periodTxt)}</div>
           <div class="stmt-info">
             <span><b>العميل:</b> ${esc(r.customer.name)}</span>
-            ${r.customer.phone ? '<span><b>التليفون:</b> ' + esc(r.customer.phone) + '</span>' : ''}
+            ${r.customer.phone ? '<span><b>الجوال:</b> ' + esc(r.customer.phone) + '</span>' : ''}
             ${r.customer.address ? '<span><b>العنوان:</b> ' + esc(r.customer.address) + '</span>' : ''}
             <span><b>تاريخ الإصدار:</b> ${new Date().toISOString().slice(0, 10)}</span>
           </div>
         </div>
         <table class="stmt-table">
-          <tr><th>التاريخ</th><th>البيان</th><th>مدين (عليه)</th><th>دائن (له)</th><th>الرصيد</th></tr>
+          <tr><th>التاريخ</th><th>البيان</th><th>مدين (${esc(c$)})</th><th>دائن (${esc(c$)})</th><th>الرصيد (${esc(c$)})</th></tr>
+          ${r.opening ? `<tr class="stmt-open"><td>${esc(r.from || '')}</td><td>رصيد ما قبل الفترة</td><td>—</td><td>—</td><td>${money(r.opening)}</td></tr>` : ''}
           ${rows.map(t => `<tr>
             <td>${esc(t.date)}</td><td>${esc(t.desc)}</td>
             <td>${t.debit ? money(t.debit) : '—'}</td>
             <td>${t.credit ? money(t.credit) : '—'}</td>
             <td>${money(t.balance)}</td>
-          </tr>`).join('') || '<tr><td colspan="5">مفيش حركات مسجلة للعميل ده</td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="5">مفيش حركات في الفترة دي</td></tr>'}
           <tr class="stmt-total">
-            <td colspan="2">الإجمالي</td>
+            <td colspan="2">إجمالي حركات الفترة</td>
             <td>${money(totalDebit)}</td>
             <td>${money(totalCredit)}</td>
-            <td>${money(totalDebit - totalCredit)} ج</td>
+            <td>${money(closing)}</td>
           </tr>
         </table>
-        <div class="stmt-final">الرصيد المستحق: <b>${money(totalDebit - totalCredit)} جنيه</b> ${totalDebit - totalCredit > 0 ? '(مطلوب من العميل)' : totalDebit - totalCredit < 0 ? '(للعميل)' : ''}</div>
-        <div class="stmt-footer">اتطبع من نظام CRM — ${esc(r.company)}</div>
+        <div class="stmt-final">الرصيد المستحق: <b>${money(closing)} ${esc(c$)}</b>
+          ${closing > 0 ? '(مطلوب من العميل)' : closing < 0 ? '(للعميل)' : '(الحساب مسدد)'}</div>
+        <div class="stmt-sign"><span>توقيع المندوب</span><span>توقيع العميل</span></div>
+        <div class="stmt-footer">صادر من نظام ${esc(r.company)} — ${new Date().toISOString().slice(0, 10)}</div>
       </div>`;
+
     openModal(`
       <h2>📄 كشف حساب: ${esc(r.customer.name)}</h2>
-      <div style="max-height:50vh;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:8px">${stmtHtml}</div>
+      <p class="modal-sub">${esc(periodTxt)}</p>
+      <div class="stmt-preview">${stmtHtml}</div>
       <div class="modal-actions">
         <button class="btn" onclick="A.printStatement()">🖨️ حفظ PDF / طباعة</button>
+        <button class="btn ghost" onclick="A.statement('${custId}')">↺ غيّر الفترة</button>
         <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
       </div>`);
     document.getElementById('print-area').innerHTML = stmtHtml;
@@ -1149,7 +1234,7 @@ function adTargets() {
   return `
     <p class="muted">حدد تارجت الزيارات والتحصيل لكل مندوب — بيظهر للمندوب في حسابه وبيتحسب في اللوحة.</p>
     <div class="table-wrap mt"><table>
-      <tr><th>المندوب</th><th>شهر</th><th>تارجت زيارات</th><th>تارجت تحصيل (ج)</th><th></th></tr>
+      <tr><th>المندوب</th><th>شهر</th><th>تارجت زيارات</th><th>تارجت تحصيل (${esc(cur())})</th><th></th></tr>
       ${reps.map(r => {
         const t = targets.find(x => String(x.rep_id) === String(r.id) && String(x.month) === month) || {};
         return `<tr>
@@ -1237,15 +1322,33 @@ function adSettings() {
       <p class="muted mt">كل مندوب يبعت للبوت: <b style="direction:ltr">/start اسم_الدخول_بتاعه</b> — وهيوصله خطة يومه كل صبح 7:00.</p>
     </div>
     <div class="card">
+      <h3>🏢 هوية الشركة</h3>
+      <div class="grid2">
+        <div><label>اسم الشركة</label><input id="s-company" value="${esc(s.COMPANY_NAME || '')}"></div>
+        <div><label>العملة</label>
+          <select id="s-currency">
+            ${['ر.س', 'ريال', 'ج.م', 'د.إ', 'د.ك', 'ر.ع', 'د.ب', 'ر.ق', 'USD'].map(x =>
+              `<option ${String(s.CURRENCY || 'ر.س') === x ? 'selected' : ''}>${x}</option>`).join('')}
+          </select></div>
+      </div>
+      <label>لوجو الشركة</label>
+      <div class="logo-box">
+        <div id="logo-preview">${s.COMPANY_LOGO ? '<img src="' + s.COMPANY_LOGO + '" alt="">' : '<span class="muted">مفيش لوجو مرفوع</span>'}</div>
+        <div>
+          <input type="file" id="s-logo-file" accept="image/*" onchange="A.logoPick(this)" style="display:none">
+          <button class="btn sm ghost" onclick="document.getElementById('s-logo-file').click()">📤 اختار صورة اللوجو</button>
+          ${s.COMPANY_LOGO ? '<button class="btn sm red" onclick="A.logoRemove()">حذف اللوجو</button>' : ''}
+          <p class="muted" style="margin-top:6px">الصورة بتتصغّر تلقائيًا. هتظهر في شاشة الدخول وفوق في التطبيق وفي كشوف الحساب.</p>
+        </div>
+      </div>
+    </div>
+    <div class="card">
       <h3>⚙️ قواعد الشغل</h3>
       <div class="grid2">
         <div><label>نطاق تأكيد الوصول (متر)</label><input id="s-geo" type="number" value="${esc(s.GEOFENCE_METERS || 150)}"></div>
         <div><label>العميل يحتاج زيارة بعد (يوم)</label><input id="s-gap" type="number" value="${esc(s.VISIT_GAP_DAYS || 14)}"></div>
       </div>
-      <div class="grid2">
-        <div><label>أقل متأخر يطلع له تنبيه (ج)</label><input id="s-overdue" type="number" value="${esc(s.OVERDUE_ALERT_MIN || 500)}"></div>
-        <div><label>اسم الشركة</label><input id="s-company" value="${esc(s.COMPANY_NAME || '')}"></div>
-      </div>
+      <div><label>أقل متأخر يطلع له تنبيه (${esc(cur())})</label><input id="s-overdue" type="number" value="${esc(s.OVERDUE_ALERT_MIN || 500)}"></div>
     </div>
     <div class="card">
       <h3>📋 سجل النظام</h3>
@@ -1257,10 +1360,54 @@ A.saveSettings = async () => {
   const data = {
     QOYOD_API_KEY: $('#s-qoyod').value.trim(), TELEGRAM_BOT_TOKEN: $('#s-tg').value.trim(),
     GEOFENCE_METERS: $('#s-geo').value, VISIT_GAP_DAYS: $('#s-gap').value,
-    OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim()
+    OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim(),
+    CURRENCY: $('#s-currency').value
   };
-  try { await api('saveSettings', { data }); toast('✅ الإعدادات اتحفظت', 'ok'); refresh(true); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
+  try {
+    await api('saveSettings', { data });
+    A._newLogo = undefined;
+    toast('✅ الإعدادات اتحفظت', 'ok');
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+/** بيصغّر صورة اللوجو في المتصفح قبل الحفظ عشان تفضل خفيفة */
+A.logoPick = (input) => {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 220;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      let out = canvas.toDataURL('image/png');
+      if (out.length > 44000) { // كبيرة؟ نحولها JPEG على خلفية بيضا
+        const c2 = document.createElement('canvas');
+        c2.width = w; c2.height = h;
+        const ctx = c2.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        out = c2.toDataURL('image/jpeg', 0.85);
+      }
+      if (out.length > 46000) return toast('الصورة كبيرة أوي — جرب صورة أبسط', 'err');
+      A._newLogo = out;
+      document.getElementById('logo-preview').innerHTML = '<img src="' + out + '" alt="">';
+      toast('✅ اللوجو جاهز — اضغط "حفظ الإعدادات" عشان يتسجل', 'ok');
+    };
+    img.onerror = () => toast('مقدرتش أقرا الصورة دي', 'err');
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+};
+A.logoRemove = () => {
+  A._newLogo = '';
+  document.getElementById('logo-preview').innerHTML = '<span class="muted">اتحذف — اضغط حفظ الإعدادات</span>';
 };
 A.syncNow = async () => {
   toast('⏳ ببدأ المزامنة...');
