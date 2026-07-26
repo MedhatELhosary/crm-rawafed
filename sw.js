@@ -1,14 +1,14 @@
 // Service Worker — بيخلي التطبيق يفتح بدون نت
-const CACHE = 'crm-rawafed-v1';
+const CACHE = 'crm-rawafed-v2';
 const SHELL = [
   './',
   './index.html',
-  './css/app.css',
-  './js/app.js',
-  './js/config.js',
+  './app.css',
+  './app.js',
+  './config.js',
   './manifest.json',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
+  './icon-192.png',
+  './icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
