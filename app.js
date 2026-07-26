@@ -517,6 +517,7 @@ A.custDetails = (id) => {
       <button class="btn sm amber" onclick="A.quickCall('${c.id}')">📞 زيارة هاتفية</button>
       <button class="btn sm ghost" onclick="A.pickLocForCustomer('${c.id}', false)">📍 ${c.lat ? 'عدّل' : 'حدد'} اللوكيشن</button>
     </div>
+    <button class="btn sm outline mt" onclick="A.statement('${c.id}')">📄 كشف حساب كامل (PDF)</button>
     ${visits.length ? '<div class="section-title"><span>آخر الزيارات</span></div>' + visits.map(v => `
       <div class="card" style="padding:11px 13px">
         <b>${esc(v.date)}</b> — <span class="badge ${v.status === 'تمت' ? 'cool' : 'gray'}">${esc(v.status)}</span>
@@ -698,12 +699,13 @@ function viewMe() {
 function viewAdmin() {
   const tabs = [
     ['dash', '📊 اللوحة'], ['customers', '👥 العملاء'], ['team', '🧑‍💼 المناديب والمناطق'],
-    ['leads', '🎯 الليدز'], ['targets', '🏁 الأهداف'], ['reports', '📄 التقارير'], ['settings', '⚙️ الإعدادات']
+    ['leads', '🎯 الليدز'], ['entries', '📒 القيود اليومية'], ['targets', '🏁 الأهداف'],
+    ['reports', '📄 التقارير'], ['settings', '⚙️ الإعدادات']
   ];
   let body = '';
   if (!S.data) body = '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
   else body = {
-    dash: adDash, customers: adCustomers, team: adTeam, leads: adLeads,
+    dash: adDash, customers: adCustomers, team: adTeam, leads: adLeads, entries: adEntries,
     targets: adTargets, reports: adReports, settings: adSettings
   }[S.adminTab]();
   return topbar('لوحة تحكم الأدمن') +
@@ -816,7 +818,8 @@ function adCustomers() {
         <td>${money(c.balance)}</td>
         <td style="color:${Number(c.overdue) > 0 ? 'var(--red)' : 'inherit'}">${money(c.overdue)}</td>
         <td>${c.priority_score || 0}</td>
-        <td><button class="btn sm ghost" onclick="A.custForm('${c.id}')">تعديل</button></td>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="A.custForm('${c.id}')">تعديل</button>
+          <button class="btn sm outline" onclick="A.statement('${c.id}')">📄</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش عملاء — ضيفهم يدوي أو استوردهم من قيود</td></tr>'}
     </table></div>
     ${list.length > 200 ? '<p class="muted mt">معروض أول 200 — استخدم البحث</p>' : ''}`;
@@ -1035,6 +1038,108 @@ A.assignLeadSave = async (id) => {
   try { await api('assignLead', payload); toast('✅ اتخصص والمندوب هيوصله تنبيه', 'ok'); refresh(true); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
+
+// ----- القيود اليومية -----
+function adEntries() {
+  const entries = (S.data.entries || []).slice().reverse();
+  const customers = (S.data.customers || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ar'));
+  return `
+    <div class="card">
+      <h3>➕ قيد يومية جديد</h3>
+      <p class="muted">للحركات اللي مش مسجلة في قيود كفواتير أو سندات (رصيد افتتاحي، تسوية، خصم اتفاق...) — بتدخل في رصيد العميل وكشف حسابه فورًا.</p>
+      <label>العميل *</label>
+      <select id="e-cust">${customers.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      <div class="grid2">
+        <div><label>نوع القيد</label><select id="e-type">
+          <option value="مدين">مدين — على العميل (بيزوّد اللي عليه)</option>
+          <option value="دائن">دائن — للعميل (بيقلل اللي عليه)</option></select></div>
+        <div><label>المبلغ (ج) *</label><input id="e-amount" type="number" inputmode="decimal" min="0"></div>
+      </div>
+      <div class="grid2">
+        <div><label>التاريخ</label><input id="e-date" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+        <div><label>البيان *</label><input id="e-desc" placeholder="مثال: رصيد افتتاحي قبل قيود"></div>
+      </div>
+      <button class="btn green mt" onclick="A.entrySave()">حفظ القيد ✔</button>
+    </div>
+    <div class="section-title"><span>القيود المسجلة (${entries.length})</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>التاريخ</th><th>العميل</th><th>البيان</th><th>مدين</th><th>دائن</th><th></th></tr>
+      ${entries.map(e => `<tr>
+        <td>${esc(String(e.date).slice(0, 10))}</td><td><b>${esc(e.customer_name)}</b></td><td>${esc(e.description || '')}</td>
+        <td style="color:var(--red)">${e.type === 'مدين' ? money(e.amount) + ' ج' : '—'}</td>
+        <td style="color:var(--green)">${e.type === 'دائن' ? money(e.amount) + ' ج' : '—'}</td>
+        <td><button class="btn sm red" onclick="A.delEntity('entry','${e.id}')">حذف</button></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش قيود مسجلة لسه</td></tr>'}
+    </table></div>`;
+}
+A.entrySave = async () => {
+  const data = {
+    customer_id: $('#e-cust').value, type: $('#e-type').value,
+    amount: $('#e-amount').value, date: $('#e-date').value, description: $('#e-desc').value.trim()
+  };
+  if (!data.customer_id) return toast('اختار العميل', 'err');
+  if (!(Number(data.amount) > 0)) return toast('اكتب المبلغ', 'err');
+  if (!data.description) return toast('اكتب البيان', 'err');
+  try {
+    await api('saveEntry', { data });
+    toast('✅ القيد اتسجل ورصيد العميل اتحدث', 'ok');
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- كشف حساب العميل (PDF) -----
+A.statement = async (custId) => {
+  toast('⏳ بجهز كشف الحساب...');
+  try {
+    const r = await api('getStatement', { customer_id: custId });
+    let running = 0;
+    const rows = r.tx.map(t => {
+      running += t.debit - t.credit;
+      return { date: t.date, desc: t.desc, debit: t.debit, credit: t.credit, balance: running };
+    });
+    const totalDebit = r.tx.reduce((s, t) => s + t.debit, 0);
+    const totalCredit = r.tx.reduce((s, t) => s + t.credit, 0);
+    const stmtHtml = `
+      <div class="stmt">
+        <div class="stmt-head">
+          <div class="stmt-company">${esc(r.company)}</div>
+          <div class="stmt-title">كشف حساب عميل</div>
+          <div class="stmt-info">
+            <span><b>العميل:</b> ${esc(r.customer.name)}</span>
+            ${r.customer.phone ? '<span><b>التليفون:</b> ' + esc(r.customer.phone) + '</span>' : ''}
+            ${r.customer.address ? '<span><b>العنوان:</b> ' + esc(r.customer.address) + '</span>' : ''}
+            <span><b>تاريخ الإصدار:</b> ${new Date().toISOString().slice(0, 10)}</span>
+          </div>
+        </div>
+        <table class="stmt-table">
+          <tr><th>التاريخ</th><th>البيان</th><th>مدين (عليه)</th><th>دائن (له)</th><th>الرصيد</th></tr>
+          ${rows.map(t => `<tr>
+            <td>${esc(t.date)}</td><td>${esc(t.desc)}</td>
+            <td>${t.debit ? money(t.debit) : '—'}</td>
+            <td>${t.credit ? money(t.credit) : '—'}</td>
+            <td>${money(t.balance)}</td>
+          </tr>`).join('') || '<tr><td colspan="5">مفيش حركات مسجلة للعميل ده</td></tr>'}
+          <tr class="stmt-total">
+            <td colspan="2">الإجمالي</td>
+            <td>${money(totalDebit)}</td>
+            <td>${money(totalCredit)}</td>
+            <td>${money(totalDebit - totalCredit)} ج</td>
+          </tr>
+        </table>
+        <div class="stmt-final">الرصيد المستحق: <b>${money(totalDebit - totalCredit)} جنيه</b> ${totalDebit - totalCredit > 0 ? '(مطلوب من العميل)' : totalDebit - totalCredit < 0 ? '(للعميل)' : ''}</div>
+        <div class="stmt-footer">اتطبع من نظام CRM — ${esc(r.company)}</div>
+      </div>`;
+    openModal(`
+      <h2>📄 كشف حساب: ${esc(r.customer.name)}</h2>
+      <div style="max-height:50vh;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:8px">${stmtHtml}</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="A.printStatement()">🖨️ حفظ PDF / طباعة</button>
+        <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
+      </div>`);
+    document.getElementById('print-area').innerHTML = stmtHtml;
+  } catch (e) { toast(e.msg || (e.offline ? 'كشف الحساب محتاج نت' : 'خطأ'), 'err'); }
+};
+A.printStatement = () => { window.print(); };
 
 // ----- الأهداف -----
 function adTargets() {

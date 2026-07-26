@@ -234,6 +234,28 @@ tr:last-child td { border-bottom: none; }
 .empty { text-align: center; color: var(--muted); padding: 34px 10px; font-size: 14px; }
 .empty .big { font-size: 40px; margin-bottom: 8px; }
 
+/* ---------- كشف الحساب والطباعة ---------- */
+#print-area { display: none; }
+.stmt { direction: rtl; font-family: 'Segoe UI', Tahoma, sans-serif; color: #111; background: #fff; padding: 4px; }
+.stmt-head { text-align: center; border-bottom: 3px solid #1e3a5f; padding-bottom: 10px; margin-bottom: 12px; }
+.stmt-company { font-size: 20px; font-weight: 800; color: #1e3a5f; }
+.stmt-title { font-size: 15px; font-weight: 700; margin-top: 2px; }
+.stmt-info { display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; font-size: 12.5px; margin-top: 8px; }
+.stmt-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.stmt-table th { background: #1e3a5f; color: #fff; padding: 7px 8px; text-align: right; border: 1px solid #1e3a5f; }
+.stmt-table td { padding: 6px 8px; border: 1px solid #c8d0dc; text-align: right; }
+.stmt-table tr:nth-child(even) td { background: #f4f6fa; }
+.stmt-total td { font-weight: 800; background: #e8f0fe !important; border-top: 2px solid #1e3a5f; }
+.stmt-final { margin-top: 12px; font-size: 14.5px; text-align: center; padding: 9px; border: 2px solid #1e3a5f; border-radius: 8px; }
+.stmt-footer { text-align: center; font-size: 11px; color: #777; margin-top: 14px; }
+
+@media print {
+  #app, #modal-root, #toast-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
+  #print-area { display: block !important; }
+  body { background: #fff; }
+  @page { size: A4; margin: 12mm; }
+}
+
 .flex { display: flex; gap: 9px; align-items: center; }
 .flex > * { flex: 1; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
