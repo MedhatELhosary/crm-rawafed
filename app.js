@@ -859,7 +859,8 @@ function adCustomers() {
         <td style="color:${Number(c.overdue) > 0 ? 'var(--red)' : 'inherit'}">${money(c.overdue)}</td>
         <td>${c.priority_score || 0}</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="A.custForm('${c.id}')">تعديل</button>
-          <button class="btn sm outline" onclick="A.statement('${c.id}')">📄</button></td>
+          <button class="btn sm outline" onclick="A.statement('${c.id}')">📄</button>
+          <button class="btn sm outline" onclick="A.overdueDetails('${c.id}')" title="تفاصيل حساب المتأخرات">🔬</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش عملاء — ضيفهم يدوي أو استوردهم من قيود</td></tr>'}
     </table></div>
     ${list.length > 200 ? '<p class="muted mt">معروض أول 200 — استخدم البحث</p>' : ''}`;
@@ -1480,6 +1481,44 @@ async function pollSyncStatus(n) {
 A.testTg = async () => {
   try { const r = await api('testTelegram', {}); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- تفاصيل حساب المتأخرات لعميل -----
+A.overdueDetails = async (custId) => {
+  toast('⏳ بحسب التفاصيل...');
+  try {
+    const r = await api('overdueBreakdown', { customer_id: custId });
+    const c$ = r.currency;
+    const t = r.totals;
+    const M = n => money(n) + ' ' + c$;
+    openModal(`
+      <h2>🔬 تفاصيل المتأخرات: ${esc(r.customer.name)}</h2>
+      <p class="modal-sub">مدة الاستحقاق ${r.customer.terms} يوم — الفاتورة بتعتبر متأخرة بعدها من تاريخ إصدارها</p>
+      <div class="card">
+        <h3>الملخص</h3>
+        <div class="stat-line"><span>إجمالي الفواتير (${t.invoiceCount})</span><b>${M(t.invoices)}</b></div>
+        ${t.negativeInvoices ? `<div class="stat-line"><span>منها فواتير بقيمة سالبة (تسويات)</span><b class="pos">${M(t.negativeInvoices)}</b></div>` : ''}
+        ${t.manualDebit ? `<div class="stat-line"><span>قيود يومية مدينة</span><b>${M(t.manualDebit)}</b></div>` : ''}
+        <div class="stat-line"><span>سندات القبض</span><b class="pos">${M(t.receipts)}</b></div>
+        <div class="stat-line"><span>المرتجعات</span><b class="pos">${M(t.returns)}</b></div>
+        ${t.manualCredit ? `<div class="stat-line"><span>قيود يومية دائنة</span><b class="pos">${M(t.manualCredit)}</b></div>` : ''}
+        <div class="stat-line"><span><b>إجمالي المدفوع/الدائن</b></span><b class="pos">${M(t.creditPool)}</b></div>
+        <div class="stat-line"><span><b>الرصيد المستحق</b></span><b class="${r.customer.balance > 0 ? 'neg' : 'pos'}">${M(r.customer.balance)}</b></div>
+        <div class="stat-line"><span><b>المتأخر منه</b></span><b class="neg">${M(r.computedOverdue)}</b></div>
+        ${t.unapplied > 0 ? `<div class="stat-line"><span>مدفوع زيادة عن الفواتير</span><b class="pos">${M(t.unapplied)}</b></div>` : ''}
+      </div>
+      <div class="section-title"><span>توزيع المدفوع على المديونيات (الأقدم الأول)</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>البيان</th><th>القيمة</th><th>اتسدد منها</th><th>الباقي</th><th>الحالة</th></tr>
+        ${r.rows.map(x => `<tr>
+          <td>${esc(x.date)}</td><td>${esc(x.label)}</td>
+          <td>${money(x.total)}</td><td>${money(x.applied)}</td>
+          <td>${money(x.remaining)}</td>
+          <td>${x.overdue > 0 ? '<span class="badge hot">' + esc(x.why) + '</span>' : '<span class="badge cool">' + esc(x.why) + '</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش مديونيات مسجلة</td></tr>'}
+      </table></div>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 // ----- فحص البيانات -----
