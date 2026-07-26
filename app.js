@@ -1120,6 +1120,7 @@ function adSettings() {
         <button class="btn green" onclick="A.saveSettings()">حفظ الإعدادات ✔</button>
         <button class="btn ghost" onclick="A.syncNow()">🔄 مزامنة دلوقتي</button>
       </div>
+      <div class="stat-line mt"><span>حالة آخر مزامنة</span><b id="sync-status">${esc(s.SYNC_STATUS || 'لسه متعملتش')}</b></div>
       <p class="muted mt">المزامنة بتشتغل لوحدها كل ساعة: فواتير + مرتجعات + تحصيلات، وبتحدث أرصدة العملاء وأولوياتهم.</p>
     </div>
     <div class="card">
@@ -1157,10 +1158,26 @@ A.saveSettings = async () => {
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 A.syncNow = async () => {
-  toast('⏳ بزامن مع قيود... ممكن تاخد دقيقة');
-  try { const r = await api('runQoyodSync', {}); toast(r.message, 'ok'); refresh(true); }
-  catch (e) { toast(e.msg || 'خطأ في المزامنة', 'err'); }
+  toast('⏳ ببدأ المزامنة...');
+  try {
+    const r = await api('runQoyodSync', {});
+    toast(r.message, 'ok');
+    pollSyncStatus(0);
+  } catch (e) { toast(e.msg || 'خطأ في المزامنة', 'err'); }
 };
+async function pollSyncStatus(n) {
+  if (n > 60) return; // نبطل متابعة بعد ~4 دقايق
+  try {
+    const r = await api('getSyncStatus', {});
+    const status = r.status || '';
+    const el = document.getElementById('sync-status');
+    if (el) el.textContent = status;
+    if (S.data && S.data.allSettings) S.data.allSettings.SYNC_STATUS = status;
+    if (status.includes('✅')) { toast('✅ المزامنة خلصت بنجاح', 'ok'); refresh(true); return; }
+    if (status.includes('❌') || status.includes('⚠️')) { toast(status, 'err'); refresh(true); return; }
+  } catch (e) { /* نكمل محاولة */ }
+  setTimeout(() => pollSyncStatus(n + 1), 4000);
+}
 A.testTg = async () => {
   try { const r = await api('testTelegram', {}); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
