@@ -24,6 +24,13 @@ function todayDayIndex() { // السبت=1 ... الخميس=6، الجمعة=0
 }
 function dayLabel(i) { return ['—', 'السبت', 'الحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس'][Number(i)] || '—'; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+/** الكيبورد العربي بيكتب ٠١٢٣ — بنحولها لأرقام إنجليزية عشان الدخول ميفشلش */
+function normDigits(s) {
+  return String(s == null ? '' : s)
+    .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0))
+    .trim();
+}
 function money(n) { n = Number(n) || 0; return n.toLocaleString('en-US', { maximumFractionDigits: 0 }); }
 /** العملة من إعدادات النظام — بتتخزن محليًا عشان تظهر حتى قبل تحميل البيانات */
 function cur() {
@@ -57,13 +64,21 @@ async function api(action, payload, opts) {
   } catch (e) {
     throw { offline: true };
   }
-  if (res.error === 'AUTH' && S.creds && !(opts && opts.noRetry)) {
-    const login = await api('login', S.creds, { noRetry: true });
-    if (login.ok) {
-      S.token = login.token; localStorage.setItem('crm_token', S.token);
-      return api(action, payload, { noRetry: true });
+  // الجلسة انتهت — نحاول نجددها بالبيانات المحفوظة، ولو فشلت نرجّعه لشاشة الدخول برسالة واضحة
+  if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
+    if (S.creds) {
+      try {
+        const login = await api('login', S.creds, { noRetry: true });
+        S.token = login.token;
+        S.user = login.user;
+        localStorage.setItem('crm_token', S.token);
+        save('crm_user', S.user);
+        return api(action, payload, { noRetry: true });
+      } catch (e) { /* البيانات المحفوظة بقت قديمة */ }
     }
-    doLogout(); throw { fatal: 'الجلسة انتهت' };
+    doLogout();
+    toast('انتهت الجلسة — سجل دخول تاني', 'err');
+    throw { fatal: 'انتهت الجلسة، سجل دخول تاني' };
   }
   if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
   return res;
@@ -195,8 +210,8 @@ function doLogout() {
 A.logout = () => { if (confirm('متأكد إنك عاوز تسجل خروج؟')) doLogout(); };
 
 A.login = async () => {
-  const username = $('#login-user').value.trim();
-  const pin = $('#login-pin').value.trim();
+  const username = normDigits($('#login-user').value).toLowerCase();
+  const pin = normDigits($('#login-pin').value);
   if (!username || !pin) return toast('اكتب اسم المستخدم والرقم السري', 'err');
   const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'ثواني...';
   try {
@@ -279,6 +294,7 @@ function topbar(subtitle) {
       ${S.queue.length ? '<span class="pending-badge">⏳ ' + S.queue.length + ' معلقة</span>' : ''}
       <span class="offline-badge">أوفلاين</span>
       <button class="btn sm ghost" onclick="A.doRefresh()" ${S.loading ? 'disabled' : ''}>${S.loading ? '⏳' : '🔄'}</button>
+      ${S.user && S.user.role === 'admin' ? '<button class="btn sm ghost" onclick="A.logout()" title="تسجيل خروج">🚪 خروج</button>' : ''}
     </div>
   </div>`;
 }
@@ -1211,14 +1227,23 @@ A.userForm = (id) => {
 };
 A.userSave = async (id) => {
   const data = {
-    id: id || undefined, name: $('#u-name').value.trim(), username: $('#u-username').value.trim(),
-    pin: $('#u-pin').value.trim(), role: $('#u-role').value, region_id: $('#u-region').value,
+    id: id || undefined, name: $('#u-name').value.trim(), username: normDigits($('#u-username').value).toLowerCase(),
+    pin: normDigits($('#u-pin').value), role: $('#u-role').value, region_id: $('#u-region').value,
     active: $('#u-active').checked
   };
   if (!data.name || !data.username) return toast('كمّل البيانات', 'err');
   closeModal();
-  try { await api('saveUser', { data }); toast('✅ اتحفظ', 'ok'); refresh(true); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  try {
+    await api('saveUser', { data });
+    // لو غيّرت بيانات دخولك انت شخصيًا، نحدّث المحفوظ عندك عشان الجلسة متقعش
+    if (id && String(id) === String(S.user.id)) {
+      S.creds = { username: data.username, pin: data.pin || (S.creds ? S.creds.pin : '') };
+      save('crm_creds', S.creds);
+      if (data.pin) toast('✅ اتحفظ — رقمك السري الجديد اتسجل', 'ok');
+      else toast('✅ اتحفظ', 'ok');
+    } else toast('✅ اتحفظ', 'ok');
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 A.regionForm = (id) => {
@@ -1539,6 +1564,15 @@ function adSettings() {
         <button class="btn ghost" onclick="A.testTg()">🔔 رسالة تجريبية للمتصلين</button>
       </div>
       <p class="muted mt">كل مندوب يبعت للبوت: <b style="direction:ltr">/start اسم_الدخول_بتاعه</b> — وهيوصله خطة يومه كل صبح 7:00.</p>
+    </div>
+    <div class="card">
+      <h3>👤 حسابي</h3>
+      <div class="stat-line"><span>الاسم</span><b>${esc(S.user.name)}</b></div>
+      <div class="stat-line"><span>اسم الدخول</span><b style="direction:ltr">${esc(S.creds ? S.creds.username : '')}</b></div>
+      <div class="flex mt">
+        <button class="btn ghost" onclick="A.userForm('${S.user.id}')">🔑 تغيير الرقم السري</button>
+        <button class="btn red" onclick="A.logout()">🚪 تسجيل خروج</button>
+      </div>
     </div>
     <div class="card">
       <h3>🏢 هوية الشركة</h3>
