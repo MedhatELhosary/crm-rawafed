@@ -540,6 +540,7 @@ A.custDetails = (id) => {
       <div class="stat-line"><span>متأخرات مستحقة</span><b class="${Number(c.overdue) > 0 ? 'neg' : 'pos'}">${moneyC(c.overdue)}</b></div>
       <div class="stat-line"><span>مبيعات آخر 90 يوم</span><b>${moneyC(c.sales_90d)}</b></div>
       <div class="stat-line"><span>مرتجعات آخر 90 يوم</span><b>${moneyC(c.returns_90d)}</b></div>
+      <div class="stat-line"><span>مدة الاستحقاق</span><b>${termsOf(c)} يوم</b></div>
       <div class="stat-line"><span>آخر دفعة</span><b>${esc(c.last_payment_date || '—')}</b></div>
       <div class="stat-line"><span>آخر زيارة</span><b>${esc(c.last_visit_date || 'لم يُزر')}</b></div>
     </div>
@@ -746,6 +747,12 @@ function viewAdmin() {
 }
 A.adminTab = t => { S.adminTab = t; render(); window.scrollTo(0, 0); };
 
+function defaultTerms() {
+  const s = (S.data && (S.data.allSettings || S.data.settings)) || {};
+  return Number(s.PAYMENT_TERMS_DAYS) || 30;
+}
+function termsOf(c) { return Number(c.payment_terms) > 0 ? Number(c.payment_terms) : defaultTerms(); }
+
 function regionName(id) {
   const r = (S.data.regions || []).find(x => String(x.id) === String(id));
   return r ? r.name : '—';
@@ -831,6 +838,7 @@ function adCustomers() {
       <button class="btn" onclick="A.custForm()">➕ عميل جديد</button>
       <button class="btn ghost" onclick="A.importQoyod()">⬇️ استيراد عملاء قيود</button>
       <button class="btn amber" onclick="A.plannerForm()">🗺️ تقسيم خط السير</button>
+      <button class="btn outline" onclick="A.bulkTermsForm()">⏱️ مدة الاستحقاق لمجموعة</button>
     </div>
     <div class="flex mt">
       <input placeholder="🔍 دور باسم العميل" value="${esc(S.custFilter)}" oninput="A.custSearch(this.value)">
@@ -840,12 +848,13 @@ function adCustomers() {
       </select>
     </div>
     <div class="table-wrap mt"><table>
-      <tr><th>العميل</th><th>المنطقة</th><th>اليوم</th><th>لوكيشن</th><th>الرصيد</th><th>المتأخر</th><th>الأولوية</th><th></th></tr>
+      <tr><th>العميل</th><th>المنطقة</th><th>اليوم</th><th>لوكيشن</th><th>الاستحقاق</th><th>الرصيد</th><th>المتأخر</th><th>الأولوية</th><th></th></tr>
       ${list.slice(0, 200).map(c => `<tr>
         <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(c.phone || '')}</div></td>
         <td>${esc(regionName(c.region_id))}</td>
         <td>${dayLabel(c.visit_day)}</td>
         <td>${c.lat ? '✅' : '<span class="badge warm">ناقص</span>'}</td>
+        <td>${Number(c.payment_terms) > 0 ? '<b>' + esc(c.payment_terms) + '</b> يوم' : '<span class="muted">' + defaultTerms() + ' يوم</span>'}</td>
         <td>${money(c.balance)}</td>
         <td style="color:${Number(c.overdue) > 0 ? 'var(--red)' : 'inherit'}">${money(c.overdue)}</td>
         <td>${c.priority_score || 0}</td>
@@ -875,8 +884,12 @@ A.custForm = (id) => {
     <div class="grid2">
       <div><label>الحالة</label>
         <select id="c-status"><option ${c.status === 'نشط' ? 'selected' : ''}>نشط</option><option ${c.status === 'موقوف' ? 'selected' : ''}>موقوف</option></select></div>
-      <div><label>كود قيود (اختياري)</label><input id="c-qoyod" value="${esc(c.qoyod_id || '')}"></div>
+      <div><label>مدة الاستحقاق (يوم)</label>
+        <input id="c-terms" type="number" min="0" value="${esc(c.payment_terms || '')}"
+          placeholder="الافتراضي ${esc(defaultTerms())} يوم"></div>
     </div>
+    <label>كود قيود (اختياري)</label><input id="c-qoyod" value="${esc(c.qoyod_id || '')}">
+    <p class="muted">الفاتورة بتعتبر متأخرة بعد ${esc(c.payment_terms || defaultTerms())} يوم من تاريخ إصدارها. سيبها فاضية عشان تمشي على الافتراضي.</p>
     <button class="btn ghost sm mt" onclick="A.adCustLoc('${id || ''}')">📍 ${c.lat ? 'تعديل اللوكيشن (متحدد ✅)' : 'تحديد اللوكيشن على الخريطة'}</button>
     <span id="c-loc-txt" class="muted"></span>
     <div class="modal-actions">
@@ -887,12 +900,13 @@ A.custForm = (id) => {
   A._custLoc = c.lat ? { lat: c.lat, lng: c.lng } : null;
 };
 A.adCustLoc = (id) => {
-  const vals = { name: $('#c-name').value, phone: $('#c-phone').value, address: $('#c-address').value, region: $('#c-region').value, day: $('#c-day').value, status: $('#c-status').value, qoyod: $('#c-qoyod').value };
+  const vals = { name: $('#c-name').value, phone: $('#c-phone').value, address: $('#c-address').value, region: $('#c-region').value, day: $('#c-day').value, status: $('#c-status').value, qoyod: $('#c-qoyod').value, terms: $('#c-terms').value };
   const cur = A._custLoc || {};
   openMapPicker(cur.lat, cur.lng, ll => {
     A.custForm(id || undefined);
     $('#c-name').value = vals.name; $('#c-phone').value = vals.phone; $('#c-address').value = vals.address;
-    $('#c-region').value = vals.region; $('#c-day').value = vals.day; $('#c-status').value = vals.status; $('#c-qoyod').value = vals.qoyod;
+    $('#c-region').value = vals.region; $('#c-day').value = vals.day; $('#c-status').value = vals.status;
+    $('#c-qoyod').value = vals.qoyod; $('#c-terms').value = vals.terms;
     A._custLoc = ll;
     $('#c-loc-txt').textContent = ' ✅ اللوكيشن اتحدد';
   });
@@ -901,12 +915,40 @@ A.custSave = async (id) => {
   const data = {
     id: id || undefined, name: $('#c-name').value.trim(), phone: $('#c-phone').value.trim(),
     address: $('#c-address').value.trim(), region_id: $('#c-region').value, visit_day: $('#c-day').value,
-    status: $('#c-status').value, qoyod_id: $('#c-qoyod').value.trim()
+    status: $('#c-status').value, qoyod_id: $('#c-qoyod').value.trim(),
+    payment_terms: $('#c-terms').value
   };
   if (A._custLoc) { data.lat = A._custLoc.lat; data.lng = A._custLoc.lng; }
   if (!data.name) return toast('اكتب اسم العميل', 'err');
   closeModal();
   try { await api('saveCustomer', { data }); toast('✅ اتحفظ', 'ok'); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.bulkTermsForm = () => {
+  const regions = S.data.regions || [];
+  openModal(`
+    <h2>⏱️ مدة الاستحقاق لمجموعة عملاء</h2>
+    <p class="modal-sub">بدل ما تعدل كل عميل لوحده — حدد المدة لمجموعة مرة واحدة.</p>
+    <label>المدة (يوم) *</label>
+    <input id="bt-days" type="number" min="1" value="${defaultTerms()}">
+    <label>تطبّق على</label>
+    <select id="bt-region">
+      <option value="">كل العملاء</option>
+      ${regions.map(r => `<option value="${r.id}">عملاء منطقة ${esc(r.name)}</option>`).join('')}
+    </select>
+    <label><input type="checkbox" id="bt-empty" checked style="width:auto"> العملاء اللي مالهمش مدة محددة بس (متغيرش اللي عدّلتهم يدوي)</label>
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.bulkTermsSave()">تطبيق ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.bulkTermsSave = async () => {
+  const payload = { days: $('#bt-days').value, region_id: $('#bt-region').value, onlyEmpty: $('#bt-empty').checked };
+  if (!(Number(payload.days) > 0)) return toast('اكتب عدد أيام صحيح', 'err');
+  closeModal();
+  toast('⏳ بطبق المدة وبعيد حساب المتأخرات...');
+  try { const r = await api('bulkTerms', payload); toast(r.message, 'ok'); refresh(true); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
@@ -1311,6 +1353,7 @@ function adSettings() {
         <button class="btn ghost" onclick="A.syncNow()">🔄 مزامنة دلوقتي</button>
       </div>
       <div class="stat-line mt"><span>حالة آخر مزامنة</span><b id="sync-status">${esc(s.SYNC_STATUS || 'لسه متعملتش')}</b></div>
+      <button class="btn amber full mt" onclick="A.diagnose()">🔍 فحص البيانات — ليه الأرقام مش ظاهرة؟</button>
       <p class="muted mt">المزامنة بتشتغل لوحدها كل ساعة: فواتير + مرتجعات + تحصيلات، وبتحدث أرصدة العملاء وأولوياتهم.</p>
     </div>
     <div class="card">
@@ -1348,7 +1391,11 @@ function adSettings() {
         <div><label>نطاق تأكيد الوصول (متر)</label><input id="s-geo" type="number" value="${esc(s.GEOFENCE_METERS || 150)}"></div>
         <div><label>العميل يحتاج زيارة بعد (يوم)</label><input id="s-gap" type="number" value="${esc(s.VISIT_GAP_DAYS || 14)}"></div>
       </div>
-      <div><label>أقل متأخر يطلع له تنبيه (${esc(cur())})</label><input id="s-overdue" type="number" value="${esc(s.OVERDUE_ALERT_MIN || 500)}"></div>
+      <div class="grid2">
+        <div><label>أقل متأخر يطلع له تنبيه (${esc(cur())})</label><input id="s-overdue" type="number" value="${esc(s.OVERDUE_ALERT_MIN || 500)}"></div>
+        <div><label>مدة الاستحقاق الافتراضية (يوم)</label><input id="s-terms" type="number" value="${esc(s.PAYMENT_TERMS_DAYS || 30)}"></div>
+      </div>
+      <p class="muted">الفاتورة بتعتبر متأخرة بعد المدة دي من تاريخ إصدارها. دي المدة الافتراضية — تقدر تحدد مدة مختلفة لكل عميل من صفحة العملاء.</p>
     </div>
     <div class="card">
       <h3>📋 سجل النظام</h3>
@@ -1361,7 +1408,7 @@ A.saveSettings = async () => {
     QOYOD_API_KEY: $('#s-qoyod').value.trim(), TELEGRAM_BOT_TOKEN: $('#s-tg').value.trim(),
     GEOFENCE_METERS: $('#s-geo').value, VISIT_GAP_DAYS: $('#s-gap').value,
     OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim(),
-    CURRENCY: $('#s-currency').value
+    CURRENCY: $('#s-currency').value, PAYMENT_TERMS_DAYS: $('#s-terms').value
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
@@ -1433,6 +1480,74 @@ async function pollSyncStatus(n) {
 A.testTg = async () => {
   try { const r = await api('testTelegram', {}); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- فحص البيانات -----
+A.diagnose = async () => {
+  toast('⏳ بفحص البيانات...');
+  try {
+    const res = await api('diagnose', {});
+    const d = res.report;
+    const issues = [];
+    if (!d.invoices) issues.push('مفيش أي فواتير متسحبة من قيود خالص — راجع الـ API Key واعمل مزامنة.');
+    if (d.invoices && !d.customersLinked) issues.push('مفيش أي عميل مربوط بكود قيود — اضغط "استيراد عملاء قيود" من صفحة العملاء.');
+    if (d.invoicesNotLinkedToCustomer) issues.push(d.invoicesNotLinkedToCustomer + ' فاتورة تخص عملاء مش موجودين عندك — استورد عملاء قيود عشان تتحسب.');
+    if (d.invoicesNoIssueDate) issues.push(d.invoicesNoIssueDate + ' فاتورة من غير تاريخ إصدار — مش هينفع نحسب استحقاقها.');
+    if (d.invoices && !d.invoicesPastDue) issues.push('مفيش فواتير عدّى استحقاقها لحد النهارده (المدة الافتراضية ' + d.paymentTerms + ' يوم) — يبقى فعلًا مفيش متأخرات 👍 لو متوقع غير كده، قلّل مدة الاستحقاق.');
+    if (d.invoices && !d.receipts) issues.push('مفيش سندات قبض متسحبة — لو عندك تحصيلات في قيود، ممكن يكون فيه مشكلة في مسار التحصيلات.');
+    if (d.customersNoRegion) issues.push(d.customersNoRegion + ' عميل من غير منطقة — مش هيظهروا لأي مندوب.');
+
+    const statusRows = Object.keys(d.statuses || {}).map(k =>
+      `<div class="stat-line"><span>${esc(k)}</span><b>${d.statuses[k]}</b></div>`).join('');
+
+    openModal(`
+      <h2>🔍 فحص البيانات</h2>
+      <p class="modal-sub">آخر مزامنة: ${esc(d.lastSync)}</p>
+      ${issues.length ? '<div class="card" style="border-right:4px solid var(--amber)"><b>الخلاصة:</b><br>' +
+        issues.map(x => '• ' + esc(x)).join('<br>') + '</div>' :
+        '<div class="card" style="border-right:4px solid var(--green)">✅ كل البيانات سليمة والأرقام المفروض ظاهرة صح.</div>'}
+      <div class="card">
+        <h3>العملاء</h3>
+        <div class="stat-line"><span>إجمالي العملاء</span><b>${d.customers}</b></div>
+        <div class="stat-line"><span>مربوطين بقيود</span><b>${d.customersLinked}</b></div>
+        <div class="stat-line"><span>من غير منطقة</span><b>${d.customersNoRegion}</b></div>
+        <div class="stat-line"><span>ليهم مدة استحقاق خاصة</span><b>${d.customersCustomTerms} <span class="muted">(الباقي ${d.paymentTerms} يوم)</span></b></div>
+        <div class="stat-line"><span>عليهم رصيد</span><b>${d.customersWithBalance}</b></div>
+        <div class="stat-line"><span>عليهم متأخرات</span><b>${d.customersWithOverdue}</b></div>
+      </div>
+      <div class="card">
+        <h3>الفواتير</h3>
+        <div class="stat-line"><span>إجمالي الفواتير</span><b>${d.invoices}</b></div>
+        <div class="stat-line"><span>من غير تاريخ إصدار</span><b>${d.invoicesNoIssueDate}</b></div>
+        <div class="stat-line"><span>عدّى استحقاقها</span><b>${d.invoicesPastDue}</b></div>
+        <div class="stat-line"><span>ليها رقم فاتورة</span><b>${d.invoicesWithNumber}</b></div>
+        <div class="stat-line"><span>فيها مبلغ مدفوع</span><b>${d.invoicesWithPaidField}</b></div>
+        <div class="stat-line"><span>مش مربوطة بعميل عندك</span><b>${d.invoicesNotLinkedToCustomer}</b></div>
+        <div class="stat-line"><span>سندات القبض</span><b>${d.receipts}</b></div>
+        <div class="stat-line"><span>المرتجعات</span><b>${d.returns}</b></div>
+      </div>
+      ${statusRows ? '<div class="card"><h3>حالات الفواتير في قيود</h3>' + statusRows + '</div>' : ''}
+      <div class="card">
+        <h3>عينة خام من قيود</h3>
+        ${d.qoyodError ? '<p style="color:var(--red)">⚠️ ' + esc(d.qoyodError) + '</p>' :
+          `<div class="stat-line"><span>رقم الفاتورة</span><b>${esc(d.qoyodSample ? d.qoyodSample.reference : '—')}</b></div>
+           <div class="stat-line"><span>تاريخ الإصدار</span><b>${esc(d.qoyodSample ? d.qoyodSample.issue_date : '—')}</b></div>
+           <div class="stat-line"><span>تاريخ الاستحقاق</span><b>${esc(d.qoyodSample ? d.qoyodSample.due_date : '—')}</b></div>
+           <div class="stat-line"><span>الحالة</span><b>${esc(d.qoyodSample ? d.qoyodSample.status : '—')}</b></div>
+           <div class="stat-line"><span>الإجمالي</span><b>${esc(d.qoyodSample ? d.qoyodSample.total : '—')}</b></div>
+           <div class="stat-line"><span>المدفوع</span><b>${esc(d.qoyodSample ? d.qoyodSample.paid : '—')}</b></div>
+           <p class="muted mt">الحقول المتاحة: ${esc(d.qoyodFields || '—')}</p>`}
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" onclick="A.copyDiag(${JSON.stringify(JSON.stringify(d)).replace(/"/g, '&quot;')})">📋 نسخ التقرير</button>
+        <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
+      </div>`);
+  } catch (e) { toast(e.msg || 'خطأ في الفحص', 'err'); }
+};
+A.copyDiag = (json) => {
+  const txt = typeof json === 'string' ? json : JSON.stringify(json);
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast('✅ اتنسخ — تقدر تبعته', 'ok'));
+  else toast('انسخه يدوي من الشاشة', 'err');
 };
 
 // ================== التشغيل ==================
