@@ -921,16 +921,24 @@ function adDaily() {
         <div class="kpi"><div class="num">${rep.totals.visitsDone}</div><div class="lbl">زيارة منفذة</div></div>
         <div class="kpi"><div class="num">${rep.totals.plannedDone}/${rep.totals.plannedCount}</div><div class="lbl">تغطية خط السير</div>
           ${rep.totals.plannedCount ? '<div class="bar"><i style="width:' + Math.round(rep.totals.plannedDone / rep.totals.plannedCount * 100) + '%"></i></div>' : ''}</div>
+        <div class="kpi"><div class="num" style="color:var(--green)">${money(rep.totals.collected)}</div><div class="lbl">تحصيلات اليوم (${esc(rep.currency || cur())})</div></div>
+        <div class="kpi"><div class="num">${money(rep.totals.netSales)}</div><div class="lbl">صافي مبيعات اليوم</div></div>
         <div class="kpi"><div class="num">${rep.totals.distanceKm}</div><div class="lbl">كم مقطوعة</div></div>
         <div class="kpi"><div class="num">${rep.totals.activeReps}/${rep.totals.totalReps}</div><div class="lbl">مندوب نشط</div></div>
       </div>
+      <div class="flex" style="margin-bottom:10px">
+        <button class="btn ghost sm" onclick="A.sendSummaryNow()">📲 ابعتلي التقرير على تليجرام دلوقتي</button>
+      </div>
       <div class="table-wrap"><table>
-        <tr><th>المندوب</th><th>الزيارات</th><th>خط السير</th><th>التغطية</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
+        <tr><th>المندوب</th><th>المنطقة</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
         ${rep.reps.map(r => `<tr>
           <td><b>${esc(r.rep_name)}</b></td>
+          <td>${esc(r.regionName || '—')}</td>
           <td>${r.visitsDone}${r.visits > r.visitsDone ? ' <span class="muted">(+' + (r.visits - r.visitsDone) + ' مش تمت)</span>' : ''}</td>
-          <td>${r.plannedDone} من ${r.plannedCount}</td>
-          <td>${r.coverage === null ? '—' : '<span class="badge ' + (r.coverage >= 80 ? 'cool' : r.coverage >= 50 ? 'warm' : 'hot') + '">' + r.coverage + '%</span>'}</td>
+          <td>${r.coverage === null ? '—' : '<span class="badge ' + (r.coverage >= 80 ? 'cool' : r.coverage >= 50 ? 'warm' : 'hot') + '">' + r.coverage + '%</span>'}
+            <div class="muted" style="font-size:11.5px">${r.plannedDone} من ${r.plannedCount}</div></td>
+          <td style="color:var(--green);font-weight:700">${r.collected ? money(r.collected) : '—'}</td>
+          <td style="font-weight:700">${r.netSales ? money(r.netSales) : '—'}${r.returns ? '<div class="muted" style="font-size:11.5px">مرتجع ' + money(r.returns) + '</div>' : ''}</td>
           <td>${r.offPlan || '—'}</td>
           <td>${r.distanceKm ? r.distanceKm + ' كم' : (r.visitsDone && !r.points ? '<span class="badge warm">مفيش تتبع</span>' : '<span class="muted">—</span>')}</td>
           <td>${esc(r.firstTime || '—')}</td>
@@ -938,7 +946,7 @@ function adDaily() {
           <td>${r.workMins ? Math.floor(r.workMins / 60) + ':' + String(r.workMins % 60).padStart(2, '0') : '—'}</td>
           <td>${r.avgVisitMin ? r.avgVisitMin + ' د' : '—'}</td>
           <td>${(r.trail.length || r.visitMarkers.length) ? `<button class="btn sm ghost" onclick="A.showTrail('${r.rep_id}')">🗺️ خط سيره</button>` : '<span class="muted">مفيش تتبع</span>'}</td>
-        </tr>`).join('') || '<tr><td colspan="11" class="muted">مفيش مناديب</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="13" class="muted">مفيش مناديب</td></tr>'}
       </table></div>
       ${rep.reps.filter(r => r.missed.length).map(r => `
         <div class="card">
@@ -1018,9 +1026,16 @@ A.showTrail = (repId) => {
   });
 };
 
+A.sendSummaryNow = async () => {
+  toast('⏳ بجهز التقرير وببعته...');
+  try { const r = await api('sendDailySummary', {}); toast(r.message, 'ok'); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
 A.exportDaily = () => {
   const rows = (S.daily.reps || []).map(r => ({
-    'التاريخ': S.daily.date, 'المندوب': r.rep_name, 'زيارات منفذة': r.visitsDone,
+    'التاريخ': S.daily.date, 'المندوب': r.rep_name, 'المنطقة': r.regionName || '',
+    'زيارات منفذة': r.visitsDone, 'التحصيلات': r.collected, 'صافي المبيعات': r.netSales, 'المرتجعات': r.returns,
     'إجمالي الزيارات': r.visits, 'عملاء الخطة': r.plannedCount, 'اتزاروا من الخطة': r.plannedDone,
     'نسبة التغطية %': r.coverage === null ? '' : r.coverage, 'زيارات خارج الخطة': r.offPlan,
     'المسافة كم': r.distanceKm, 'أول تحرك': r.firstTime, 'آخر تحرك': r.lastTime,
