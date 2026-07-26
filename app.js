@@ -5,7 +5,7 @@
 const S = {
   token: localStorage.getItem('crm_token') || '',
   user: JSON.parse(localStorage.getItem('crm_user') || 'null'),
-  creds: JSON.parse(localStorage.getItem('crm_creds') || 'null'),
+  device: localStorage.getItem('crm_device') || '',
   data: JSON.parse(localStorage.getItem('crm_boot') || 'null'),
   queue: JSON.parse(localStorage.getItem('crm_queue') || '[]'),
   liveVisit: JSON.parse(localStorage.getItem('crm_live_visit') || 'null'),
@@ -53,6 +53,14 @@ function logoHtml(size, cls) {
   return `<div class="logo-circle ${cls || ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.48)}px;border-radius:${Math.round(size * 0.3)}px">${esc(companyName()[0] || 'ر')}</div>`;
 }
 function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+/** وصف مختصر للجهاز — بيظهر للأدمن في قايمة الأجهزة المسجلة */
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  const os = /Android/i.test(ua) ? 'أندرويد' : /iPhone|iPad|iPod/i.test(ua) ? 'آيفون' :
+             /Windows/i.test(ua) ? 'ويندوز' : /Mac/i.test(ua) ? 'ماك' : 'جهاز';
+  const br = /Edg/i.test(ua) ? 'Edge' : /Chrome/i.test(ua) ? 'Chrome' : /Safari/i.test(ua) ? 'Safari' : '';
+  return (os + (br ? ' — ' + br : '')).slice(0, 60);
+}
 
 // ================== الاتصال بالسيرفر ==================
 async function api(action, payload, opts) {
@@ -64,17 +72,17 @@ async function api(action, payload, opts) {
   } catch (e) {
     throw { offline: true };
   }
-  // الجلسة انتهت — نحاول نجددها بالبيانات المحفوظة، ولو فشلت نرجّعه لشاشة الدخول برسالة واضحة
+  // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
   if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
-    if (S.creds) {
+    if (S.device) {
       try {
-        const login = await api('login', S.creds, { noRetry: true });
-        S.token = login.token;
-        S.user = login.user;
+        const r = await api('renew', { device: S.device }, { noRetry: true });
+        S.token = r.token;
+        S.user = r.user;
         localStorage.setItem('crm_token', S.token);
         save('crm_user', S.user);
         return api(action, payload, { noRetry: true });
-      } catch (e) { /* البيانات المحفوظة بقت قديمة */ }
+      } catch (e) { /* الجهاز اتلغى أو انتهت صلاحيته */ }
     }
     doLogout();
     toast('انتهت الجلسة — سجل دخول تاني', 'err');
@@ -203,11 +211,16 @@ A.mapConfirm = () => {
 // ================== الدخول والخروج ==================
 function doLogout() {
   stopTracking(true);
-  ['crm_token', 'crm_user', 'crm_creds', 'crm_boot', 'crm_live_visit'].forEach(k => localStorage.removeItem(k));
-  S.token = ''; S.user = null; S.data = null; S.liveVisit = null;
+  ['crm_token', 'crm_user', 'crm_creds', 'crm_device', 'crm_boot', 'crm_live_visit'].forEach(k => localStorage.removeItem(k));
+  S.token = ''; S.user = null; S.data = null; S.liveVisit = null; S.device = '';
   render();
 }
-A.logout = () => { if (confirm('متأكد إنك عاوز تسجل خروج؟')) doLogout(); };
+A.logout = async () => {
+  if (!confirm('متأكد إنك عاوز تسجل خروج؟')) return;
+  const dev = S.device;
+  if (dev) { try { await api('logoutDevice', { device: dev }); } catch (e) {} }
+  doLogout();
+};
 
 A.login = async () => {
   const username = normDigits($('#login-user').value).toLowerCase();
@@ -215,10 +228,12 @@ A.login = async () => {
   if (!username || !pin) return toast('اكتب اسم المستخدم والرقم السري', 'err');
   const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'ثواني...';
   try {
-    const res = await api('login', { username, pin }, { noRetry: true });
-    S.token = res.token; S.user = res.user; S.creds = { username, pin };
+    const res = await api('login', { username, pin, device: deviceLabel() }, { noRetry: true });
+    S.token = res.token; S.user = res.user; S.device = res.device || '';
     localStorage.setItem('crm_token', S.token);
-    save('crm_user', S.user); save('crm_creds', S.creds);
+    localStorage.setItem('crm_device', S.device);
+    localStorage.removeItem('crm_creds');   // مبقيناش نخزّن الرقم السري على الجهاز
+    save('crm_user', S.user);
     S.tab = 'today'; S.adminTab = 'dash';
     render();
     await refresh();
@@ -783,7 +798,7 @@ function viewMe() {
     </div>
     <div class="card">
       <h3>📲 بوت تليجرام</h3>
-      <p class="muted">عشان توصلك خطة يومك كل صبح: افتح البوت وابعتله<br><b>/start ${esc(S.creds ? S.creds.username : '')}</b></p>
+      <p class="muted">عشان توصلك خطة يومك كل صبح: افتح البوت وابعتله<br><b>/start ${esc(S.user.username || '')}</b></p>
     </div>
     ${S.queue.length ? '<div class="card"><h3>⏳ عمليات مستنية النت (' + S.queue.length + ')</h3><button class="btn sm ghost" onclick="A.doRefresh()">حاول ترفعها دلوقتي</button></div>' : ''}
     <button class="btn red full mt" onclick="A.logout()">تسجيل خروج</button>
@@ -1015,6 +1030,143 @@ A.exportDaily = () => {
   downloadCsv('التقرير_اليومي_' + S.daily.date, rows);
 };
 
+// ================== استيراد وتحديث من ملف Excel/CSV ==================
+/** قارئ CSV بسيط بيتعامل مع علامات التنصيص والفواصل جوه النص */
+function parseCsv(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);   // شيل علامة BOM
+  const rows = [];
+  let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i], next = text[i + 1];
+    if (inQ) {
+      if (ch === '"' && next === '"') { cell += '"'; i++; }
+      else if (ch === '"') inQ = false;
+      else cell += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',' || ch === ';' || ch === '\t') { row.push(cell); cell = ''; }
+    else if (ch === '\r') { /* تجاهل */ }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => String(c).trim() !== ''));
+}
+
+A.importForm = (type) => {
+  type = type || 'customers';
+  const label = type === 'leads' ? 'الليدز' : 'العملاء';
+  openModal(`
+    <h2>📥 استيراد وتحديث ${esc(label)} من ملف</h2>
+    <p class="modal-sub">نزّل التمبلت، املاه، وارفعه — الموجود هيتحدث والجديد هيتضاف.</p>
+    <div class="card">
+      <b>1️⃣ نزّل الملف</b>
+      <div class="flex mt">
+        <button class="btn ghost sm" onclick="A.downloadTemplate('${type}', false)">📄 تمبلت فاضي</button>
+        <button class="btn ghost sm" onclick="A.downloadTemplate('${type}', true)">📋 بياناتي الحالية</button>
+      </div>
+      <p class="muted mt">لو هتعدّل على بيانات موجودة، نزّل "بياناتي الحالية" وعدّل فيها — <b>متمسحش عمود "معرف النظام"</b>.</p>
+    </div>
+    <div class="card">
+      <b>2️⃣ املا الملف واحفظه</b>
+      <p class="muted">افتحه بـ Excel، املا الصفوف، وبعدين احفظه بصيغة
+      <b>CSV UTF-8</b> (من File ← Save As ← اختار "CSV UTF-8").</p>
+    </div>
+    <div class="card">
+      <b>3️⃣ ارفعه</b>
+      <input type="file" id="imp-file" accept=".csv,text/csv" style="display:none" onchange="A.importPreview('${type}', this)">
+      <button class="btn full mt" onclick="document.getElementById('imp-file').click()">⬆️ اختار الملف</button>
+    </div>
+    <div id="imp-result"></div>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+};
+
+A.downloadTemplate = async (type, withData) => {
+  toast('⏳ بجهز الملف...');
+  try {
+    const t = await api('exportTemplate', { type: type, withData: !!withData });
+    const rows = [t.headers].concat(t.rows || []);
+    const csv = '﻿' + rows.map(r => r.map(c =>
+      '"' + String(c == null ? '' : c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = (withData ? 'بيانات_' : 'تمبلت_') + t.label + '.csv';
+    a.click();
+    toast('✅ اتنزّل — المناطق المتاحة: ' + (t.regions.join('، ') || 'مفيش مناطق'), 'ok');
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.importPreview = async (type, input) => {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const box = document.getElementById('imp-result');
+  box.innerHTML = '<div class="card">⏳ بيقرا الملف...</div>';
+  const text = await file.text();
+  const grid = parseCsv(text);
+  if (grid.length < 2) { box.innerHTML = '<div class="card" style="color:var(--red)">الملف فاضي أو مفيهوش بيانات تحت رؤوس الأعمدة</div>'; return; }
+  const headers = grid[0].map(h => String(h).trim());
+  const rows = grid.slice(1).map((r, i) => {
+    const o = { __row: i + 2 };
+    headers.forEach((h, j) => o[h] = r[j] === undefined ? '' : r[j]);
+    return o;
+  });
+  A._impRows = rows; A._impType = type;
+
+  box.innerHTML = '<div class="card">⏳ بيفحص ' + rows.length + ' صف...</div>';
+  try {
+    const totals = { added: 0, updated: 0, skipped: 0, errors: [] };
+    for (let i = 0; i < rows.length; i += 200) {
+      const r = await api('bulkImport', { type: type, rows: rows.slice(i, i + 200), dryRun: true });
+      totals.added += r.result.added; totals.updated += r.result.updated; totals.skipped += r.result.skipped;
+      totals.errors = totals.errors.concat(r.result.errors);
+    }
+    A._impCheck = totals;
+    box.innerHTML = `
+      <div class="card" style="border-right:4px solid ${totals.errors.length ? 'var(--amber)' : 'var(--green)'}">
+        <b>نتيجة الفحص (لسه محفظتش حاجة):</b>
+        <div class="stat-line"><span>هيتضافوا جدد</span><b class="pos">${totals.added}</b></div>
+        <div class="stat-line"><span>هيتحدثوا</span><b>${totals.updated}</b></div>
+        <div class="stat-line"><span>مفيش تغيير فيهم</span><b class="muted">${totals.skipped}</b></div>
+        <div class="stat-line"><span>صفوف فيها مشاكل</span><b class="${totals.errors.length ? 'neg' : ''}">${totals.errors.length}</b></div>
+      </div>
+      ${totals.errors.length ? `<div class="card">
+        <b>⚠️ الصفوف دي هتتساب من غير حفظ:</b>
+        <div class="table-wrap mt"><table>
+          <tr><th>الصف</th><th>الاسم</th><th>السبب</th></tr>
+          ${totals.errors.slice(0, 40).map(e => `<tr><td>${e.row}</td><td>${esc(e.name)}</td><td>${esc(e.reason)}</td></tr>`).join('')}
+        </table></div>
+        ${totals.errors.length > 40 ? '<p class="muted">... و' + (totals.errors.length - 40) + ' صف كمان</p>' : ''}
+      </div>` : ''}
+      ${(totals.added + totals.updated) ? `<button class="btn green full" onclick="A.importApply()">✔ تمام — نفّذ التحديث</button>`
+        : '<div class="card muted">مفيش أي صف صالح للحفظ.</div>'}`;
+  } catch (e) {
+    box.innerHTML = '<div class="card" style="color:var(--red)">' + esc(e.msg || 'خطأ في الفحص') + '</div>';
+  }
+};
+
+A.importApply = async () => {
+  const rows = A._impRows || [], type = A._impType;
+  const box = document.getElementById('imp-result');
+  box.innerHTML = '<div class="card">⏳ بيحفظ...</div>';
+  try {
+    const totals = { added: 0, updated: 0, skipped: 0, errors: [] };
+    for (let i = 0; i < rows.length; i += 200) {
+      box.innerHTML = '<div class="card">⏳ بيحفظ ' + Math.min(i + 200, rows.length) + ' من ' + rows.length + '...</div>';
+      const r = await api('bulkImport', { type: type, rows: rows.slice(i, i + 200), dryRun: false });
+      totals.added += r.result.added; totals.updated += r.result.updated;
+      totals.errors = totals.errors.concat(r.result.errors);
+    }
+    if (type === 'customers') { try { await api('finishImport', {}); } catch (e) {} }
+    box.innerHTML = `<div class="card" style="border-right:4px solid var(--green)">
+      ✅ <b>تم بنجاح</b><div class="stat-line"><span>اتضافوا</span><b class="pos">${totals.added}</b></div>
+      <div class="stat-line"><span>اتحدثوا</span><b>${totals.updated}</b></div>
+      ${totals.errors.length ? '<div class="stat-line"><span>اتساب بمشاكل</span><b class="neg">' + totals.errors.length + '</b></div>' : ''}</div>`;
+    toast('✅ اتحفظ: ' + totals.added + ' جديد و' + totals.updated + ' تحديث', 'ok');
+    refresh(true);
+  } catch (e) {
+    box.innerHTML = '<div class="card" style="color:var(--red)">' + esc(e.msg || 'خطأ في الحفظ') + '</div>';
+  }
+};
+
 // ----- إدارة العملاء -----
 function adCustomers() {
   const regions = S.data.regions || [];
@@ -1030,6 +1182,7 @@ function adCustomers() {
       <button class="btn ghost" onclick="A.importQoyod()">⬇️ استيراد عملاء قيود</button>
       <button class="btn amber" onclick="A.plannerForm()">🗺️ تقسيم خط السير</button>
       <button class="btn outline" onclick="A.bulkTermsForm()">⏱️ مدة الاستحقاق لمجموعة</button>
+      <button class="btn green" onclick="A.importForm('customers')">📥 استيراد/تحديث من ملف</button>
     </div>
     <div class="flex mt">
       <input placeholder="🔍 دور باسم العميل" value="${esc(S.custFilter)}" oninput="A.custSearch(this.value)">
@@ -1187,9 +1340,20 @@ function adTeam() {
         <td>${esc(regionName(u.region_id))}</td>
         <td>${String(u.active) === 'FALSE' ? '<span class="badge gray">موقوف</span>' : '<span class="badge cool">نشط</span>'}</td>
         <td>${esc(u.telegram_chat_id || '—')}</td>
-        <td><button class="btn sm ghost" onclick="A.userForm('${u.id}')">تعديل</button></td>
+        <td style="white-space:nowrap"><button class="btn sm ghost" onclick="A.userForm('${u.id}')">تعديل</button>
+          <button class="btn sm outline" onclick="A.revokeSessions('${u.id}','${esc(u.name)}')" title="إنهاء جلساته على كل الأجهزة">🔒</button></td>
       </tr>`).join('')}
     </table></div>
+    <div class="section-title"><span>🔐 الأجهزة المسجّل دخولها (${(S.data.sessions || []).length})</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>المستخدم</th><th>الجهاز</th><th>آخر نشاط</th><th>تنتهي في</th></tr>
+      ${(S.data.sessions || []).slice().reverse().slice(0, 30).map(s => `<tr>
+        <td><b>${esc(s.user_name || '')}</b></td><td>${esc(s.device || '—')}</td>
+        <td>${esc(String(s.last_seen || '').slice(0, 16))}</td><td>${esc(s.expires || '')}</td>
+      </tr>`).join('') || '<tr><td colspan="4" class="muted">مفيش أجهزة مسجلة</td></tr>'}
+    </table></div>
+    <p class="muted">لو موبايل مندوب ضاع أو حد ساب الشغل، اضغط 🔒 جنب اسمه فوق عشان تقفل جلساته فورًا.</p>
+
     <div class="section-title"><span>المناطق</span>
       <button class="btn sm" onclick="A.regionForm()">➕ منطقة جديدة</button></div>
     <div class="table-wrap"><table>
@@ -1235,13 +1399,25 @@ A.userSave = async (id) => {
   closeModal();
   try {
     await api('saveUser', { data });
-    // لو غيّرت بيانات دخولك انت شخصيًا، نحدّث المحفوظ عندك عشان الجلسة متقعش
-    if (id && String(id) === String(S.user.id)) {
-      S.creds = { username: data.username, pin: data.pin || (S.creds ? S.creds.pin : '') };
-      save('crm_creds', S.creds);
-      if (data.pin) toast('✅ اتحفظ — رقمك السري الجديد اتسجل', 'ok');
-      else toast('✅ اتحفظ', 'ok');
+    // غيّرت بياناتك انت؟ السيرفر بيقفل كل الجلسات — فبنسجل دخول من جديد فورًا عشان متتقطعش
+    if (id && String(id) === String(S.user.id) && data.pin) {
+      const res = await api('login', { username: data.username, pin: data.pin, device: deviceLabel() }, { noRetry: true });
+      S.token = res.token; S.user = res.user; S.device = res.device || '';
+      localStorage.setItem('crm_token', S.token);
+      localStorage.setItem('crm_device', S.device);
+      save('crm_user', S.user);
+      toast('✅ اتغير رقمك السري — وكل الأجهزة التانية اتقفلت', 'ok');
     } else toast('✅ اتحفظ', 'ok');
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.revokeSessions = async (userId, name) => {
+  if (!confirm('هتقفل كل جلسات ' + name + ' على كل الأجهزة — هيحتاج يسجل دخول تاني. نكمل؟')) return;
+  try {
+    const r = await api('revokeSessions', { user_id: userId });
+    toast(r.message, 'ok');
+    if (String(userId) === String(S.user.id)) { doLogout(); return; }
     refresh(true);
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
@@ -1277,7 +1453,10 @@ function adLeads() {
   const leads = (S.data.leads || []).slice().reverse();
   const reps = (S.data.users || []).filter(u => u.role === 'rep');
   return `
-    <button class="btn" onclick="A.leadForm()">➕ إضافة ليد</button>
+    <div class="flex">
+      <button class="btn" onclick="A.leadForm()">➕ إضافة ليد</button>
+      <button class="btn green" onclick="A.importForm('leads')">📥 استيراد/تحديث من ملف</button>
+    </div>
     <div class="table-wrap mt"><table>
       <tr><th>الاسم</th><th>التليفون</th><th>المنطقة</th><th>المندوب</th><th>المرحلة</th><th>المصدر</th><th></th></tr>
       ${leads.map(l => `<tr>
@@ -1525,8 +1704,13 @@ function adReports() {
 function downloadCsv(filename, rows) {
   if (!rows.length) return toast('مفيش بيانات للتصدير', 'err');
   const heads = Object.keys(rows[0]).filter(k => k !== '_row');
+  // منع تنفيذ المعادلات لما الملف يتفتح في Excel
+  const safe = v => {
+    const s = String(v == null ? '' : v).replace(/"/g, '""').replace(/\n/g, ' ');
+    return /^[=+@\t\r]/.test(s) ? "'" + s : s;
+  };
   const csv = '﻿' + heads.join(',') + '\n' + rows.map(r =>
-    heads.map(h => '"' + String(r[h] == null ? '' : r[h]).replace(/"/g, '""').replace(/\n/g, ' ') + '"').join(',')).join('\n');
+    heads.map(h => '"' + safe(r[h]) + '"').join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   a.download = filename + '.csv';
@@ -1568,7 +1752,7 @@ function adSettings() {
     <div class="card">
       <h3>👤 حسابي</h3>
       <div class="stat-line"><span>الاسم</span><b>${esc(S.user.name)}</b></div>
-      <div class="stat-line"><span>اسم الدخول</span><b style="direction:ltr">${esc(S.creds ? S.creds.username : '')}</b></div>
+      <div class="stat-line"><span>اسم الدخول</span><b style="direction:ltr">${esc(S.user.username || '')}</b></div>
       <div class="flex mt">
         <button class="btn ghost" onclick="A.userForm('${S.user.id}')">🔑 تغيير الرقم السري</button>
         <button class="btn red" onclick="A.logout()">🚪 تسجيل خروج</button>
