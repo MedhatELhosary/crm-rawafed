@@ -1565,7 +1565,11 @@ A.orderView = async (id) => {
     openModal(`
       <h2>🛒 طلب ${esc(o.customer_name)}</h2>
       <p class="modal-sub">${esc(String(o.date).slice(0, 10))} • المندوب ${esc(o.rep_name)} • ${statusBadge(o.status, o.error)}</p>
-      ${o.error ? '<div class="card" style="border-right:4px solid var(--red)"><b>سبب الفشل:</b><div class="muted">' + esc(o.error) + '</div></div>' : ''}
+      ${o.error ? `<div class="card" style="border-right:4px solid var(--red)">
+        <b>❌ سبب الفشل (زي ما قيود رجّعه):</b>
+        <div class="err-box" id="err-text">${esc(o.error)}</div>
+        <button class="btn sm ghost mt" onclick="A.copyText('err-text')">📋 نسخ نص الخطأ</button>
+      </div>` : ''}
       <div class="table-wrap"><table>
         <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>
         ${r.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.sku || '')}</div></td>
@@ -1584,6 +1588,14 @@ A.orderView = async (id) => {
       </div>`);
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
+A.copyText = (id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const txt = el.textContent;
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast('✅ اتنسخ — ابعته عشان نظبط الإعداد', 'ok'));
+  else toast('حدد النص وانسخه يدوي', 'err');
+};
+
 A.pushOrder = async (id) => {
   toast('⏳ ببعت لقيود...');
   try { const r = await api('pushOrder', { id: id }); toast(r.message, 'ok'); A.loadSales(); }
