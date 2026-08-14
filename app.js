@@ -342,9 +342,11 @@ A.doRefresh = () => { qflush(); flushTrack(); ensureTracking(true); refresh(); }
 // ================== واجهة المندوب ==================
 function viewRep() {
   const unread = ((S.data || {}).notifications || []).length;
+  const fuCount = S.fu ? (S.fu.late.length + S.fu.today.length) : 0;
   const tabs = [
-    ['today', '📅', 'اليوم'], ['customers', '👥', 'العملاء'], ['leads', '🎯', 'الليدز'],
-    ['notifs', '🔔', 'تنبيهات'], ['me', '👤', 'حسابي']
+    ['today', '📅', 'اليوم'], ['followups', '📌', 'متابعات'], ['customers', '👥', 'العملاء'],
+    ['mine', '📒', 'سجلي'], ['leads', '🎯', 'ليدز'], ['notifs', '🔔', 'تنبيهات'],
+    ['me', '👤', 'حسابي']
   ];
   let body = '';
   if (TRK.failCount > 0 && TRK.failCount < 3) body += `<div class="card" style="border-right:4px solid var(--amber)">
@@ -352,7 +354,9 @@ function viewRep() {
     <p class="muted">اتأكد إن الـ GPS مفتوح وإنك مش في مكان مغلق. لو فضل كده التطبيق هيقف.</p></div>`;
   if (!S.data) body += '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
   else if (S.tab === 'today') body += viewToday();
+  else if (S.tab === 'followups') body = viewFollowups();
   else if (S.tab === 'customers') body = viewCustomers();
+  else if (S.tab === 'mine') body = viewMine();
   else if (S.tab === 'leads') body = viewLeads();
   else if (S.tab === 'notifs') body = viewNotifs();
   else if (S.tab === 'me') body = viewMe();
@@ -361,6 +365,7 @@ function viewRep() {
     '<div class="bottomnav">' + tabs.map(t =>
       `<button class="${S.tab === t[0] ? 'active' : ''}" onclick="A.tab('${t[0]}')">
         <span class="ico">${t[1]}</span>${t[2]}
+        ${t[0] === 'followups' && fuCount ? '<span class="dot">' + fuCount + '</span>' : ''}
         ${t[0] === 'notifs' && unread ? '<span class="dot">' + unread + '</span>' : ''}
       </button>`).join('') + '</div>';
 }
@@ -408,6 +413,17 @@ function viewToday() {
       <b>🟢 زيارة جارية: ${esc(c ? c.name : '')}</b>
       <div style="font-size:13px;opacity:.9">بدأت ${esc(S.liveVisit.checkin_time)}${S.liveVisit.inRange === false ? ' — ⚠️ بعيد عن لوكيشن العميل' : ''}</div>
       <button class="btn" onclick="A.checkoutForm()">إنهاء الزيارة وكتابة التقرير ←</button>
+    </div>`;
+  }
+  // المتابعات المستحقة بتظهر فوق خالص — أول حاجة يشوفها المندوب
+  if (!S.fu) A.loadFollowups();
+  const due = S.fu ? S.fu.late.concat(S.fu.today) : [];
+  if (due.length) {
+    html += `<div class="card" style="border-right:4px solid ${S.fu.late.length ? 'var(--red)' : 'var(--amber)'}">
+      <b>📌 عندك ${due.length} متابعة مستحقة${S.fu.late.length ? ' (منهم ' + S.fu.late.length + ' متأخرة)' : ''}</b>
+      <div class="muted">${due.slice(0, 3).map(x =>
+        esc(x.customer_name) + (x.amount ? ' — ' + moneyC(x.amount) : '')).join(' • ')}${due.length > 3 ? ' ...' : ''}</div>
+      <button class="btn sm amber mt" onclick="A.tab('followups')">افتح المتابعات ←</button>
     </div>`;
   }
   const k = S.data.kpis || {};
@@ -625,8 +641,16 @@ A.checkoutForm = () => {
     <input type="file" id="v-photo" accept="image/*" capture="environment" style="display:none" onchange="A.visitPhotoPick(this)">
     <button type="button" class="btn sm ghost" onclick="document.getElementById('v-photo').click()">📷 صوّر / ارفع صورة</button>
     <div id="v-photos" class="thumb-row"></div>
+    <div class="card" style="border-right:4px solid var(--green)">
+      <b>💰 وعد بالدفع (لو العميل وعد)</b>
+      <div class="grid2">
+        <div><label>المبلغ (${esc(cur())})</label><input id="v-promise-amount" type="text" inputmode="decimal" placeholder="0"></div>
+        <div><label>تاريخ الوعد</label><input id="v-promise-date" type="date"></div>
+      </div>
+      <p class="muted">هيفضل يفكّرك بيه لحد ما تقفله — ومش هيضيع.</p>
+    </div>
     <label>الخطوة الجاية (اختياري)</label>
-    <input id="v-next" placeholder="مثال: متابعة تحصيل الشيك">
+    <input id="v-next" placeholder="مثال: يراجع المخزن ويرد">
     <label>تاريخها</label>
     <input id="v-next-date" type="date">
     <div class="modal-actions">
@@ -664,8 +688,14 @@ A.checkoutSave = async () => {
   const c = custById(lv.customer_id);
   const form = {
     status: $('#v-status').value, outcome: $('#v-outcome').value,
-    report: $('#v-report').value.trim(), next_action: $('#v-next').value.trim(), next_action_date: $('#v-next-date').value
+    report: $('#v-report').value.trim(), next_action: $('#v-next').value.trim(),
+    next_action_date: $('#v-next-date').value,
+    promise_amount: normDigits(($('#v-promise-amount') || {}).value || ''),
+    promise_date: ($('#v-promise-date') || {}).value || ''
   };
+  if (Number(form.promise_amount) > 0 && !form.promise_date) {
+    return toast('حدد تاريخ وعد الدفع', 'err');
+  }
   const photos = (A._visitPhotos || []).slice();
   const outTime = new Date().toTimeString().slice(0, 5);
   if (S.myPos) pushTrackPoint(S.myPos.lat, S.myPos.lng, S.myPos.acc, 'انصراف: ' + (c ? c.name : ''));
@@ -702,6 +732,144 @@ A.checkoutSave = async () => {
   qflush();
   refresh(true);
 }
+
+// ----- تبويب المتابعات ووعود الدفع -----
+function viewFollowups() {
+  if (!S.fu) { A.loadFollowups(); return '<div class="empty"><div class="big">⏳</div>بيحمل متابعاتك...</div>'; }
+  const f = S.fu;
+  const card = (x, late) => `
+    <div class="cust-card" style="border-right:4px solid ${late ? 'var(--red)' : x.type === 'وعد دفع' ? 'var(--green)' : 'var(--blue)'}">
+      <div class="cust-head">
+        <div>
+          <div class="cust-name">${esc(x.customer_name)}</div>
+          <div class="cust-meta">${x.type === 'وعد دفع' ? '💰 وعد دفع' : '📌 متابعة'} • ${esc(x.due_date)}
+            ${late ? '<span class="badge hot">متأخرة ' + x.lateDays + ' يوم</span>' : ''}</div>
+        </div>
+        ${x.amount ? '<b class="pos">' + moneyC(x.amount) + '</b>' : ''}
+      </div>
+      ${x.note ? '<div class="muted mt">' + esc(x.note) + '</div>' : ''}
+      <div class="cust-actions">
+        <button class="btn sm green" onclick="A.fuClose('${x.id}')">✔ تم</button>
+        <button class="btn sm amber" onclick="A.fuPostpone('${x.id}')">📅 أجّل</button>
+        <button class="btn sm ghost" onclick="A.custDetails('${x.customer_id}')">العميل</button>
+        <button class="btn sm outline" onclick="A.fuCancel('${x.id}')">إلغاء</button>
+      </div>
+    </div>`;
+  return `
+    ${f.late.length ? '<div class="section-title"><span style="color:var(--red)">⚠️ متأخرة عن ميعادها (' + f.late.length + ')</span></div>' + f.late.map(x => card(x, true)).join('') : ''}
+    <div class="section-title"><span>📌 مستحقة النهارده (${f.today.length})</span></div>
+    ${f.today.length ? f.today.map(x => card(x, false)).join('') : '<div class="empty">مفيش متابعات النهارده 👍</div>'}
+    ${f.upcoming.length ? '<div class="section-title"><span>الجاية (' + f.upcoming.length + ')</span></div>' +
+      f.upcoming.map(x => `<div class="cust-card" style="padding:10px 12px">
+        <div class="cust-head"><div><div class="cust-name" style="font-size:14px">${esc(x.customer_name)}</div>
+        <div class="cust-meta">${x.type === 'وعد دفع' ? '💰' : '📌'} ${esc(x.due_date)} ${x.note ? '— ' + esc(x.note) : ''}</div></div>
+        ${x.amount ? '<b>' + moneyC(x.amount) + '</b>' : ''}</div></div>`).join('') : ''}
+    ${f.done.length ? '<div class="section-title"><span>اتقفلت مؤخرًا</span></div>' +
+      f.done.slice(0, 10).map(x => `<div class="stat-line"><span>${esc(x.customer_name)} — ${esc(x.type)}</span>
+        <b class="${x.status === 'تم' ? 'pos' : 'muted'}">${esc(x.status)}</b></div>`).join('') : ''}`;
+}
+
+A.loadFollowups = async () => {
+  if (A._fuLoading) return;
+  A._fuLoading = true;
+  try { S.fu = await api('followups', {}); render(); }
+  catch (e) { if (!e.offline) toast(e.msg || 'خطأ', 'err'); }
+  finally { A._fuLoading = false; }
+};
+A.fuClose = async (id) => {
+  const note = prompt('ملاحظة على الإقفال (اختياري):', '');
+  if (note === null) return;
+  try { const r = await api('closeFollowup', { id: id, note: note }); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.fuCancel = async (id) => {
+  if (!confirm('إلغاء المتابعة دي؟')) return;
+  try { const r = await api('closeFollowup', { id: id, cancel: true }); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.fuPostpone = (id) => {
+  const d = new Date(); d.setDate(d.getDate() + 3);
+  openModal(`
+    <h2>📅 تأجيل المتابعة</h2>
+    <label>التاريخ الجديد</label>
+    <input id="fu-date" type="date" value="${d.toISOString().slice(0, 10)}">
+    <label>السبب (اختياري)</label><input id="fu-note" placeholder="العميل طلب أسبوع كمان">
+    <div class="modal-actions">
+      <button class="btn amber" onclick="A.fuPostponeSave('${id}')">تأجيل ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">رجوع</button>
+    </div>`);
+};
+A.fuPostponeSave = async (id) => {
+  const payload = { id: id, postpone: true, due_date: $('#fu-date').value, note: $('#fu-note').value.trim() };
+  closeModal();
+  try { const r = await api('closeFollowup', payload); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.fuAdd = (custId) => {
+  const c = custById(custId);
+  const d = new Date(); d.setDate(d.getDate() + 7);
+  openModal(`
+    <h2>📌 متابعة جديدة: ${esc(c.name)}</h2>
+    <label>النوع</label>
+    <select id="fu-type"><option>متابعة</option><option>وعد دفع</option></select>
+    <label>التاريخ</label><input id="fu-due" type="date" value="${d.toISOString().slice(0, 10)}">
+    <label>المبلغ (لو وعد دفع)</label><input id="fu-amount" type="text" inputmode="decimal" placeholder="0">
+    <label>الملاحظة</label><input id="fu-note2" placeholder="مثال: هيسدد نص المبلغ">
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.fuAddSave('${custId}')">حفظ ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.fuAddSave = async (custId) => {
+  const payload = {
+    customer_id: custId, type: $('#fu-type').value, due_date: $('#fu-due').value,
+    amount: normDigits($('#fu-amount').value), note: $('#fu-note2').value.trim()
+  };
+  if (!payload.due_date) return toast('حدد التاريخ', 'err');
+  closeModal();
+  try { const r = await api('saveFollowup', payload); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- سجل المندوب: طلباته وتحصيلاته -----
+function viewMine() {
+  if (!S.sales) { A.loadSales(); return '<div class="empty"><div class="big">⏳</div>بيحمل سجلك...</div>'; }
+  const d = S.sales;
+  const sub = S.mineTab || 'collections';
+  const orders = (d.orders || []).slice().reverse();
+  const cols = (d.collections || []).slice().reverse();
+  const month = new Date().toISOString().slice(0, 7);
+  const monthCols = cols.filter(c => String(c.date).slice(0, 7) === month);
+  const monthOrders = orders.filter(o => String(o.date).slice(0, 7) === month);
+  return `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="num" style="color:var(--green)">${money(monthCols.reduce((s, c) => s + (Number(c.amount) || 0), 0))}</div>
+        <div class="lbl">تحصيلاتك الشهر (${esc(d.currency)})</div></div>
+      <div class="kpi"><div class="num">${money(monthOrders.reduce((s, o) => s + (Number(o.total) || 0), 0))}</div>
+        <div class="lbl">طلباتك الشهر</div></div>
+    </div>
+    <div class="pill-row">
+      <button class="pill ${sub === 'collections' ? 'active' : ''}" onclick="A.mineTab('collections')">💵 تحصيلاتي (${cols.length})</button>
+      <button class="pill ${sub === 'orders' ? 'active' : ''}" onclick="A.mineTab('orders')">🛒 طلباتي (${orders.length})</button>
+    </div>
+    ${sub === 'collections'
+      ? (cols.length ? cols.map(c => `<div class="cust-card" style="padding:11px 13px">
+          <div class="cust-head">
+            <div><div class="cust-name" style="font-size:14.5px">${esc(c.customer_name)}</div>
+              <div class="cust-meta">${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
+                ${c.reference ? '• ' + esc(c.reference) : ''}</div></div>
+            <div style="text-align:left"><b class="pos">${money(c.amount)}</b>
+              <div>${c.status === 'مرسل' ? '<span class="badge cool">في قيود</span>' : '<span class="badge warm">مستني</span>'}</div></div>
+          </div></div>`).join('') : '<div class="empty"><div class="big">💵</div>لسه مسجلتش تحصيلات</div>')
+      : (orders.length ? orders.map(o => `<div class="cust-card" style="padding:11px 13px">
+          <div class="cust-head">
+            <div><div class="cust-name" style="font-size:14.5px">${esc(o.customer_name)}</div>
+              <div class="cust-meta">${esc(String(o.date).slice(0, 10))} • ${o.items_count} صنف</div></div>
+            <div style="text-align:left"><b>${money(o.total)}</b>
+              <div>${o.status === 'مرسل' ? '<span class="badge cool">اتبعت</span>' : o.status === 'فشل' ? '<span class="badge hot">فشل</span>' : '<span class="badge warm">مستني</span>'}</div></div>
+          </div></div>`).join('') : '<div class="empty"><div class="big">🛒</div>لسه مسجلتش طلبات</div>')}`;
+}
+A.mineTab = (t) => { S.mineTab = t; render(); };
 
 // ----- تبويب العملاء -----
 function viewCustomers() {
@@ -744,6 +912,12 @@ A.custDetails = (id) => {
       <h3>💼 كشف الحساب (من قيود)</h3>
       <div class="stat-line"><span>الرصيد الحالي</span><b class="${Number(c.balance) > 0 ? 'neg' : 'pos'}">${moneyC(c.balance)}</b></div>
       <div class="stat-line"><span>متأخرات مستحقة</span><b class="${Number(c.overdue) > 0 ? 'neg' : 'pos'}">${moneyC(c.overdue)}</b></div>
+      ${Number(c.overdue) > 0 ? `<div class="aging-row">
+        ${[['aging_30', '1-30 يوم', 'warm'], ['aging_60', '31-60', 'warm'], ['aging_90', '61-90', 'hot'], ['aging_90p', '+90 يوم', 'hot']]
+          .filter(a => Number(c[a[0]]) > 0)
+          .map(a => `<div class="aging-cell ${a[2]}"><b>${money(c[a[0]])}</b><span>${a[1]}</span></div>`).join('')
+          || '<div class="muted">التفاصيل هتظهر بعد أول مزامنة</div>'}
+      </div>` : ''}
       <div class="stat-line"><span>مبيعات آخر 90 يوم</span><b>${moneyC(c.sales_90d)}</b></div>
       <div class="stat-line"><span>مرتجعات آخر 90 يوم</span><b>${moneyC(c.returns_90d)}</b></div>
       <div class="stat-line"><span>مدة الاستحقاق</span><b>${termsOf(c)} يوم</b></div>
@@ -759,7 +933,10 @@ A.custDetails = (id) => {
       <button class="btn sm amber" onclick="A.quickCall('${c.id}')">📞 زيارة هاتفية</button>
       <button class="btn sm ghost" onclick="A.pickLocForCustomer('${c.id}', false)">📍 ${c.lat ? 'عدّل' : 'حدد'} اللوكيشن</button>
     </div>
-    <button class="btn sm outline mt" onclick="A.statement('${c.id}')">📄 كشف حساب كامل (PDF)</button>
+    <div class="flex mt">
+      <button class="btn sm outline" onclick="A.statement('${c.id}')">📄 كشف حساب (PDF)</button>
+      <button class="btn sm ghost" onclick="A.fuAdd('${c.id}')">📌 متابعة جديدة</button>
+    </div>
     ${visits.length ? '<div class="section-title"><span>آخر الزيارات</span></div>' + visits.map(v => `
       <div class="card" style="padding:11px 13px">
         <b>${esc(v.date)}</b> — <span class="badge ${v.status === 'تمت' ? 'cool' : 'gray'}">${esc(v.status)}</span>
@@ -1035,14 +1212,29 @@ function adDash() {
         <td>${r.telegram_chat_id || '<span class="muted">غير متصل</span>'}</td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">ضيف مناديب من صفحة المناديب والمناطق</td></tr>'}
     </table></div>
+    <div class="section-title"><span>💰 أعمار الديون</span>
+      <button class="btn sm amber" onclick="A.followupsAdmin()">📌 متابعات المناديب</button></div>
+    <div class="kpi-grid">
+      ${[['aging_30', '1-30 يوم'], ['aging_60', '31-60 يوم'], ['aging_90', '61-90 يوم'], ['aging_90p', 'أكتر من 90 يوم']]
+        .map((a, i) => {
+          const sum = customers.reduce((s, c) => s + (Number(c[a[0]]) || 0), 0);
+          const pct = totalOverdue ? Math.round(sum / totalOverdue * 100) : 0;
+          return `<div class="kpi"><div class="num" style="color:${i >= 2 ? 'var(--red)' : 'var(--amber)'}">${money(sum)}</div>
+            <div class="lbl">${a[1]} (${pct}%)</div></div>`;
+        }).join('')}
+    </div>
     <div class="section-title"><span>💰 أعلى متأخرات</span></div>
     <div class="table-wrap"><table>
-      <tr><th>العميل</th><th>المنطقة</th><th>المتأخر</th><th>آخر دفعة</th><th>آخر زيارة</th></tr>
+      <tr><th>العميل</th><th>المنطقة</th><th>المتأخر</th><th>1-30</th><th>31-60</th><th>61-90</th><th>+90</th><th>آخر دفعة</th></tr>
       ${topOverdue.map(c => `<tr>
         <td><b>${esc(c.name)}</b></td><td>${esc(regionName(c.region_id))}</td>
-        <td style="color:var(--red);font-weight:700">${moneyC(c.overdue)}</td>
-        <td>${esc(c.last_payment_date || '—')}</td><td>${esc(c.last_visit_date || '—')}</td>
-      </tr>`).join('') || '<tr><td colspan="5" class="muted">مفيش متأخرات — أو المزامنة مع قيود لسه</td></tr>'}
+        <td style="color:var(--red);font-weight:700">${money(c.overdue)}</td>
+        <td>${Number(c.aging_30) ? money(c.aging_30) : '—'}</td>
+        <td>${Number(c.aging_60) ? money(c.aging_60) : '—'}</td>
+        <td class="neg">${Number(c.aging_90) ? money(c.aging_90) : '—'}</td>
+        <td class="neg"><b>${Number(c.aging_90p) ? money(c.aging_90p) : '—'}</b></td>
+        <td>${esc(c.last_payment_date || '—')}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش متأخرات — أو المزامنة مع قيود لسه</td></tr>'}
     </table></div>
     <div class="section-title"><span>آخر الزيارات</span></div>
     <div class="table-wrap"><table>
@@ -1179,6 +1371,38 @@ A.showTrail = (repId) => {
     setTimeout(() => map.invalidateSize(), 250);
     return () => map.remove();
   });
+};
+
+A.followupsAdmin = async () => {
+  toast('⏳ بجيب المتابعات...');
+  try {
+    const r = await api('followupsAdmin', {});
+    openModal(`
+      <h2>📌 متابعات المناديب</h2>
+      <p class="modal-sub">وعود الدفع والمتابعات المفتوحة — والمتأخرة عن ميعادها.</p>
+      <div class="table-wrap"><table>
+        <tr><th>المندوب</th><th>مفتوحة</th><th>متأخرة</th><th>وعود دفع</th><th>مبلغ متأخر</th></tr>
+        ${r.reps.map(x => `<tr>
+          <td><b>${esc(x.rep_name)}</b></td><td>${x.open}</td>
+          <td>${x.late ? '<span class="badge hot">' + x.late + '</span>' : '—'}</td>
+          <td class="pos">${money(x.promised)}</td>
+          <td class="neg">${x.lateAmount ? money(x.lateAmount) : '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="muted">مفيش متابعات مفتوحة</td></tr>'}
+      </table></div>
+      ${r.late.length ? `<div class="section-title"><span style="color:var(--red)">⚠️ متأخرة عن ميعادها (${r.late.length})</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>العميل</th><th>المندوب</th><th>النوع</th><th>الميعاد</th><th>متأخرة</th><th>المبلغ</th><th>الملاحظة</th></tr>
+          ${r.late.map(f => `<tr>
+            <td><b>${esc(f.customer_name)}</b></td><td>${esc(f.rep_name)}</td>
+            <td>${f.type === 'وعد دفع' ? '💰 وعد دفع' : '📌 متابعة'}</td>
+            <td>${esc(f.due_date)}</td>
+            <td><span class="badge hot">${f.lateDays} يوم</span></td>
+            <td>${f.amount ? money(f.amount) : '—'}</td>
+            <td class="muted">${esc(f.note || '')}</td>
+          </tr>`).join('')}
+        </table></div>` : '<div class="card" style="border-right:4px solid var(--green)">✅ مفيش متابعات متأخرة</div>'}
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 A.sendSummaryNow = async () => {
