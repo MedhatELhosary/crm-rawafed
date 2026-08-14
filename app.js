@@ -2398,6 +2398,7 @@ function adSettings() {
         <div><label>مسار الأصناف</label><input id="s-products-path" value="${esc(s.QOYOD_PRODUCTS_PATH || '/products')}" style="direction:ltr"></div>
         <div><label>كود حساب الصندوق في قيود</label><input id="s-cash-account" value="${esc(s.QOYOD_CASH_ACCOUNT_ID || '')}" style="direction:ltr"></div>
       </div>
+      <div><label>صلاحية عرض السعر (يوم)</label><input id="s-quote-days" type="number" min="1" value="${esc(s.QUOTE_VALID_DAYS || 15)}"></div>
       <div><label>نسبة الضريبة %</label><input id="s-vat" type="number" value="${esc(s.VAT_PERCENT || 15)}"></div>
       <div class="grid2">
         <div><label>حد ائتمان افتراضي (0 = مفيش)</label><input id="s-credit-default" type="number" value="${esc(s.CREDIT_LIMIT_DEFAULT || 0)}"></div>
@@ -2521,6 +2522,7 @@ A.saveSettings = async () => {
     QOYOD_RECEIPT_PATH: $('#s-receipt-path').value.trim(),
     QOYOD_PRODUCTS_PATH: $('#s-products-path').value.trim(),
     QOYOD_CASH_ACCOUNT_ID: $('#s-cash-account').value.trim(),
+    QUOTE_VALID_DAYS: $('#s-quote-days').value,
     VAT_PERCENT: $('#s-vat').value,
     CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
     CREDIT_BLOCK: $('#s-credit-block').checked ? 'TRUE' : 'FALSE',
