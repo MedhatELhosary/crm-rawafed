@@ -1467,6 +1467,13 @@ function adSales() {
           </td></tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش طلبات لسه</td></tr>'}
       </table></div>`
     : sub === 'collections' ? `
+      ${(d.byMethod || []).length ? `<div class="kpi-grid">
+        ${d.byMethod.map(m => `<div class="kpi">
+          <div class="num" style="color:${m.custody ? 'var(--amber)' : 'var(--green)'}">${money(m.total)}</div>
+          <div class="lbl">${esc(m.method)} (${m.count})${m.custody ? ' — عهدة' : ''}</div>
+          ${m.pushed < m.total ? '<div class="muted" style="font-size:11px">في قيود: ' + money(m.pushed) + '</div>' : ''}
+        </div>`).join('')}
+      </div>` : ''}
       <div class="table-wrap"><table>
         <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
         ${cols.map(c => `<tr>
@@ -2396,15 +2403,17 @@ function adSettings() {
       </div>
       <div><label>مسار الأصناف</label><input id="s-products-path" value="${esc(s.QOYOD_PRODUCTS_PATH || '/products')}" style="direction:ltr"></div>
       <div class="card" style="background:var(--blue-soft)">
-        <b>الربط الإجباري في قيود</b>
-        <p class="muted">قيود بيطلب المخزن في عرض السعر، وحساب الصندوق في سند القبض.</p>
+        <b>الربط مع حسابات قيود</b>
+        <p class="muted">قيود بيطلب المخزن في عرض السعر، وحساب لكل طريقة تحصيل في سند القبض.</p>
         <button class="btn sm" onclick="A.qoyodLists()">🔄 جيب المخازن والحسابات من قيود</button>
-        <div class="grid2 mt">
-          <div><label>المخزن</label>
-            <select id="s-inventory"><option value="${esc(s.QOYOD_INVENTORY_ID || '')}">${esc(s.QOYOD_INVENTORY_ID || '— اضغط الزرار فوق —')}</option></select></div>
-          <div><label>حساب الصندوق</label>
-            <select id="s-cash-account"><option value="${esc(s.QOYOD_CASH_ACCOUNT_ID || '')}">${esc(s.QOYOD_CASH_ACCOUNT_ID || '— اضغط الزرار فوق —')}</option></select></div>
-        </div>
+        <div class="mt"><label>المخزن (لعروض الأسعار)</label>
+          <select id="s-inventory"><option value="${esc(s.QOYOD_INVENTORY_ID || '')}">${esc(s.QOYOD_INVENTORY_ID || '— اضغط الزرار فوق —')}</option></select></div>
+        <label class="mt">طرق التحصيل (افصل بينهم بفاصلة)</label>
+        <input id="s-pay-methods" value="${esc(s.PAY_METHODS || 'كاش,مدى,شيك,تحويل')}">
+        <div class="section-title" style="margin-bottom:4px"><span>حساب كل طريقة</span></div>
+        <div id="method-accounts">${methodAccountsHtml(s)}</div>
+        <p class="muted mt">✅ علّم على الطرق اللي بتدخل <b>عهدة المندوب</b> (الكاش عادةً). ومدى الأفضل يروح لحساب وسيط
+        "مدى تحت التحصيل" وتسوّي منه للبنك آخر الشهر — عشان مطابقة البنك تبقى سهلة.</p>
       </div>
       <div><label>صلاحية عرض السعر (يوم)</label><input id="s-quote-days" type="number" min="1" value="${esc(s.QUOTE_VALID_DAYS || 15)}"></div>
       <div><label>نسبة الضريبة %</label><input id="s-vat" type="number" value="${esc(s.VAT_PERCENT || 15)}"></div>
@@ -2529,8 +2538,17 @@ A.saveSettings = async () => {
     QOYOD_QUOTE_PATH: $('#s-quote-path').value.trim(),
     QOYOD_RECEIPT_PATH: $('#s-receipt-path').value.trim(),
     QOYOD_PRODUCTS_PATH: $('#s-products-path').value.trim(),
-    QOYOD_CASH_ACCOUNT_ID: $('#s-cash-account').value.trim(),
     QOYOD_INVENTORY_ID: $('#s-inventory').value.trim(),
+    PAY_METHODS: $('#s-pay-methods').value.trim(),
+    METHOD_ACCOUNTS: JSON.stringify((() => {
+      const map = {};
+      document.querySelectorAll('.method-acc').forEach(el => {
+        if (el.value) map[el.dataset.method] = el.value;
+      });
+      return map;
+    })()),
+    CUSTODY_METHODS: Array.from(document.querySelectorAll('.method-custody'))
+      .filter(el => el.checked).map(el => el.dataset.method).join(','),
     QUOTE_VALID_DAYS: $('#s-quote-days').value,
     VAT_PERCENT: $('#s-vat').value,
     CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
@@ -2634,6 +2652,28 @@ A.qoyodProbe = async () => {
   } catch (e) { toast(e.msg || 'خطأ في الفحص', 'err'); }
 };
 
+/** صف لكل طريقة دفع: الحساب في قيود + هل تدخل العهدة */
+function methodAccountsHtml(s) {
+  let map = {};
+  try { map = JSON.parse(s.METHOD_ACCOUNTS || '{}'); } catch (e) { map = {}; }
+  if (!map['كاش'] && s.QOYOD_CASH_ACCOUNT_ID) map['كاش'] = s.QOYOD_CASH_ACCOUNT_ID;
+  const custody = String(s.CUSTODY_METHODS || 'كاش').split(',').map(x => x.trim());
+  const methods = String(s.PAY_METHODS || 'كاش').split(',').map(x => x.trim()).filter(Boolean);
+  A._accounts = A._accounts || [];
+  return methods.map(m => `
+    <div class="method-row">
+      <span class="method-name">${esc(m)}</span>
+      <select class="method-acc" data-method="${esc(m)}">
+        ${A._accounts.length
+          ? '<option value="">— اختار الحساب —</option>' + A._accounts.map(a =>
+              `<option value="${esc(String(a.id))}" ${String(a.id) === String(map[m] || '') ? 'selected' : ''}>${esc(a.name)}</option>`).join('')
+          : `<option value="${esc(String(map[m] || ''))}">${esc(map[m] ? 'كود ' + map[m] : '— اضغط جيب الحسابات —')}</option>`}
+      </select>
+      <label class="method-cust"><input type="checkbox" class="method-custody" data-method="${esc(m)}"
+        ${custody.indexOf(m) > -1 ? 'checked' : ''}> عهدة</label>
+    </div>`).join('');
+}
+
 A.qoyodLists = async () => {
   toast('⏳ بجيب المخازن والحسابات...');
   try {
@@ -2646,7 +2686,13 @@ A.qoyodLists = async () => {
     };
     const s = S.data.allSettings || {};
     fill('s-inventory', r.inventories, s.QOYOD_INVENTORY_ID);
-    fill('s-cash-account', r.accounts, s.QOYOD_CASH_ACCOUNT_ID);
+    // حسابات طرق الدفع
+    A._accounts = r.accounts || [];
+    const box = document.getElementById('method-accounts');
+    if (box) {
+      const live = Object.assign({}, s, { PAY_METHODS: ($('#s-pay-methods') || {}).value || s.PAY_METHODS });
+      box.innerHTML = methodAccountsHtml(live);
+    }
     const msg = [];
     if (r.inventoriesError) msg.push('المخازن: ' + r.inventoriesError);
     if (r.accountsError) msg.push('الحسابات: ' + r.accountsError);
@@ -3012,6 +3058,16 @@ function vatPct() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
   return Number(s.VAT_PERCENT) || 0;
 }
+function payMethods() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return String(s.PAY_METHODS || 'كاش').split(',').map(x => x.trim()).filter(Boolean);
+}
+function custodyMethods() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return String(s.CUSTODY_METHODS || 'كاش').split(',').map(x => x.trim()).filter(Boolean);
+}
+function isCustodyMethod(m) { return custodyMethods().indexOf(String(m).trim()) > -1; }
+
 function featureOn(key) {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
   return String(s[key] === undefined ? 'TRUE' : s[key]).toUpperCase() !== 'FALSE';
@@ -3173,22 +3229,28 @@ A.collectForm = (custId) => {
     <input id="col-amount" type="text" inputmode="decimal" placeholder="0">
     <label>طريقة الدفع</label>
     <select id="col-method" onchange="A.colMethod(this.value)">
-      <option>كاش</option><option>شيك</option><option>تحويل</option>
+      ${payMethods().map(m => '<option>' + esc(m) + '</option>').join('')}
     </select>
+    <div id="col-hint" class="muted"></div>
     <div id="col-ref-box" style="display:none">
-      <label>رقم الشيك / المرجع</label><input id="col-ref">
+      <label id="col-ref-label">رقم المرجع</label><input id="col-ref">
     </div>
     <label>ملاحظات</label><input id="col-notes">
     <label>توقيع العميل (اختياري)</label>
     ${signaturePad('col-sig')}
-    <p class="muted mt">التحصيل الكاش بيتسجل في عهدتك لحد ما تورّده للإدارة.</p>
+    <p class="muted mt">تحصيل ${esc(custodyMethods().join(' و'))} بيتسجل في عهدتك لحد ما تورّده للإدارة.</p>
     <div class="modal-actions">
       <button class="btn green" onclick="A.collectSave('${custId}')">حفظ السند ✔</button>
       <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
     </div>`, () => { initSignature('col-sig'); });
 };
 A.colMethod = (v) => {
-  document.getElementById('col-ref-box').style.display = (v === 'كاش') ? 'none' : 'block';
+  const custody = isCustodyMethod(v);
+  document.getElementById('col-ref-box').style.display = custody ? 'none' : 'block';
+  const lbl = document.getElementById('col-ref-label');
+  if (lbl) lbl.textContent = v === 'شيك' ? 'رقم الشيك' : v === 'مدى' ? 'رقم العملية / آخر 4 أرقام' : 'رقم المرجع';
+  const hint = document.getElementById('col-hint');
+  if (hint) hint.textContent = custody ? '💰 هيدخل عهدتك لحد ما تورّده' : '🏦 بيروح لحساب ' + v + ' مباشرة — مش هيدخل عهدتك';
 };
 A.collectSave = async (custId) => {
   const amount = normDigits($('#col-amount').value);
