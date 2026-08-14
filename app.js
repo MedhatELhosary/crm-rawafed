@@ -31,16 +31,38 @@ function normDigits(s) {
     .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0))
     .trim();
 }
-function money(n) { n = Number(n) || 0; return n.toLocaleString('en-US', { maximumFractionDigits: 0 }); }
+/** الهللات بتظهر بس لما تكون موجودة — 285 تفضل 285 و327.75 متتقربش لـ 328 */
+function money(n) {
+  n = Number(n) || 0;
+  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
 /** العملة من إعدادات النظام — بتتخزن محليًا عشان تظهر حتى قبل تحميل البيانات */
 function cur() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
   return s.CURRENCY || localStorage.getItem('crm_currency') || 'ر.س';
 }
 function moneyC(n) { return money(n) + ' ' + cur(); }
-function logoSrc() {
+/** اللوجو بيتخزن على الجهاز — السيرفر بيبعت بصمته بس مع كل تحديث */
+function logoSrc() { return localStorage.getItem('crm_logo') || ''; }
+async function syncLogo() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
-  return s.COMPANY_LOGO || localStorage.getItem('crm_logo') || '';
+  const hash = s.COMPANY_LOGO_HASH;
+  if (hash === undefined) return;
+  if (!hash) {
+    if (localStorage.getItem('crm_logo')) {
+      localStorage.removeItem('crm_logo'); localStorage.removeItem('crm_logo_hash'); render();
+    }
+    return;
+  }
+  if (localStorage.getItem('crm_logo_hash') === hash && localStorage.getItem('crm_logo')) return;
+  try {
+    const r = await api('getLogo', {});
+    if (r.logo) {
+      localStorage.setItem('crm_logo', r.logo);
+      localStorage.setItem('crm_logo_hash', r.hash || hash);
+      render();
+    }
+  } catch (e) { /* هنجيبه المرة الجاية */ }
 }
 function companyName() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
@@ -115,17 +137,19 @@ async function refresh(silent) {
   if (!silent) S.loading = true, render();
   try {
     const action = S.user && S.user.role === 'admin' ? 'adminData' : 'bootstrap';
-    const res = await api(action, {});
+    // التحديث الجزئي: بنبعت بصمات اللي عندنا والسيرفر بيبعت المتغير بس
+    const res = await api(action, { hashes: (S.data && S.data.hashes) || null });
+    if (res.unchanged && res.unchanged.length && S.data) {
+      res.unchanged.forEach(k => { if (S.data[k] !== undefined) res[k] = S.data[k]; });
+    }
     S.data = res;
     save('crm_boot', res);
     // تخزين هوية الشركة محليًا عشان تظهر في شاشة الدخول قبل تحميل البيانات
     const st = res.settings || res.allSettings || {};
     if (st.CURRENCY) localStorage.setItem('crm_currency', st.CURRENCY);
     if (st.COMPANY_NAME) localStorage.setItem('crm_company', st.COMPANY_NAME);
-    if (st.COMPANY_LOGO !== undefined) {
-      if (st.COMPANY_LOGO) localStorage.setItem('crm_logo', st.COMPANY_LOGO);
-      else localStorage.removeItem('crm_logo');
-    }
+    syncLogo();       // اللوجو بيتحمّل مرة واحدة بس لو اتغير
+    syncProducts();   // وكذلك كتالوج الأصناف
   } catch (e) {
     if (!silent && !e.offline) toast(e.msg || e.fatal || 'مشكلة في التحديث', 'err');
     if (e.offline && !silent) toast('📴 مفيش نت — شغال بآخر بيانات محفوظة');
@@ -398,9 +422,23 @@ function viewToday() {
     return html;
   }
   const list = myCustomers().filter(c => Number(c.visit_day) === dayIdx);
-  const sorted = sortByPriorityAndDistance(list);
-  html += `<div class="section-title"><span>خط سير ${dayLabel(dayIdx)} (${list.length} عميل)</span>
-    <button class="btn sm ghost" onclick="A.sortNearMe()">📍 رتب بالأقرب ليا</button></div>`;
+  const sorted = (S.routeOrder && S.routeOrder.length)
+    ? S.routeOrder.map(id => list.find(c => String(c.id) === String(id))).filter(Boolean)
+        .concat(list.filter(c => S.routeOrder.indexOf(String(c.id)) === -1))
+    : sortByPriorityAndDistance(list);
+  html += `<div class="section-title"><span>خط سير ${dayLabel(dayIdx)} (${list.length} عميل)</span></div>
+    <div class="flex" style="margin-bottom:10px">
+      <button class="btn sm ghost" onclick="A.sortNearMe()">📍 رتب بالأقرب ليا</button>
+      <button class="btn sm amber" onclick="A.optimizeRoute()">🚗 أقصر طريق</button>
+    </div>
+    ${S.routeInfo ? `<div class="card" style="border-right:4px solid var(--amber)">
+      <b>🚗 خط سير محسوب:</b> ${S.routeInfo.stops} محطة — حوالي ${S.routeInfo.km} كم
+      <div class="flex mt">
+        <a class="btn sm" target="_blank" href="${S.routeInfo.mapsUrl}">🗺️ افتح المسار في خرايط جوجل</a>
+        <button class="btn sm outline" onclick="A.clearRoute()">إلغاء الترتيب</button>
+      </div>
+      ${S.routeInfo.trimmed ? '<div class="muted mt">خرايط جوجل بتقبل 10 محطات بس — المسار فيها لأول 10.</div>' : ''}
+    </div>` : ''}`;
   if (!list.length) html += '<div class="empty"><div class="big">🗺️</div>مفيش عملاء متحددين لليوم ده.<br>الأدمن بيقسم خط السير من الداشبورد.</div>';
   else html += sorted.map(c => custCard(c, false)).join('');
 
@@ -429,9 +467,69 @@ A.sortNearMe = async () => {
   try {
     toast('📍 بجيب موقعك...');
     S.myPos = await getPosition();
+    S.routeOrder = null; S.routeInfo = null;
     render();
     toast('اترتبوا بالأقرب ليك ✅', 'ok');
   } catch (e) { toast(e.message, 'err'); }
+};
+A.clearRoute = () => { S.routeOrder = null; S.routeInfo = null; render(); };
+
+/**
+ * أقصر طريق (خوارزمية الأقرب-فالأقرب): بيبدأ من مكانك ويروح لأقرب عميل،
+ * ومنه لأقرب عميل بعده... لحد ما يخلص كل عملاء اليوم.
+ */
+A.optimizeRoute = async () => {
+  const dayIdx = todayDayIndex();
+  const all = myCustomers().filter(c => Number(c.visit_day) === dayIdx);
+  const located = all.filter(c => c.lat && c.lng);
+  if (located.length < 2) return toast('محتاج عميلين على الأقل بلوكيشن محدد', 'err');
+  try {
+    toast('📍 بجيب موقعك...');
+    S.myPos = await getPosition();
+  } catch (e) { return toast(e.message, 'err'); }
+
+  // العملاء اللي اتزاروا النهارده بيتشالوا من المسار
+  const today = new Date().toISOString().slice(0, 10);
+  const doneIds = {};
+  (S.data.visits || []).forEach(v => {
+    if (String(v.date).slice(0, 10) === today && v.status === 'تمت') doneIds[String(v.customer_id)] = true;
+  });
+  const pending = located.filter(c => !doneIds[String(c.id)]);
+  if (!pending.length) return toast('خلصت كل عملاء النهارده 👏', 'ok');
+
+  const remaining = pending.slice();
+  const order = [];
+  let cur = { lat: S.myPos.lat, lng: S.myPos.lng };
+  let total = 0;
+  while (remaining.length) {
+    let bi = 0, bd = Infinity;
+    remaining.forEach((c, i) => {
+      const d = distMeters(cur.lat, cur.lng, Number(c.lat), Number(c.lng));
+      if (d < bd) { bd = d; bi = i; }
+    });
+    const next = remaining.splice(bi, 1)[0];
+    total += bd;
+    order.push(next);
+    cur = { lat: Number(next.lat), lng: Number(next.lng) };
+  }
+
+  // رابط خرايط جوجل (بتقبل 10 محطات كحد أقصى)
+  const stops = order.slice(0, 10);
+  const dest = stops[stops.length - 1];
+  const waypoints = stops.slice(0, -1).map(c => c.lat + ',' + c.lng).join('|');
+  const mapsUrl = 'https://www.google.com/maps/dir/?api=1' +
+    '&origin=' + S.myPos.lat + ',' + S.myPos.lng +
+    '&destination=' + dest.lat + ',' + dest.lng +
+    (waypoints ? '&waypoints=' + encodeURIComponent(waypoints) : '') +
+    '&travelmode=driving';
+
+  S.routeOrder = order.map(c => String(c.id));
+  S.routeInfo = {
+    stops: order.length, km: Math.round(total / 100) / 10,
+    mapsUrl: mapsUrl, trimmed: order.length > 10
+  };
+  render();
+  toast('🚗 المسار اتحسب: ' + order.length + ' محطة — ' + S.routeInfo.km + ' كم', 'ok');
 };
 
 // ----- تسجيل الوصول -----
@@ -505,6 +603,7 @@ async function doCheckin(c, pos) {
 // ----- إنهاء الزيارة -----
 A.checkoutForm = () => {
   const c = custById(S.liveVisit.customer_id);
+  A._visitPhotos = [];
   openModal(`
     <h2>تقرير زيارة: ${esc(c ? c.name : '')}</h2>
     <label>نتيجة الزيارة</label>
@@ -521,6 +620,11 @@ A.checkoutForm = () => {
     </select>
     <label>تفاصيل التقرير</label>
     <textarea id="v-report" rows="3" placeholder="اكتب اللي حصل: الطلبية، الملاحظات، وعود الدفع..."></textarea>
+    ${micButton('v-report')}
+    <label>صور الزيارة (اختياري)</label>
+    <input type="file" id="v-photo" accept="image/*" capture="environment" style="display:none" onchange="A.visitPhotoPick(this)">
+    <button type="button" class="btn sm ghost" onclick="document.getElementById('v-photo').click()">📷 صوّر / ارفع صورة</button>
+    <div id="v-photos" class="thumb-row"></div>
     <label>الخطوة الجاية (اختياري)</label>
     <input id="v-next" placeholder="مثال: متابعة تحصيل الشيك">
     <label>تاريخها</label>
@@ -531,13 +635,38 @@ A.checkoutForm = () => {
     </div>`);
 };
 
+/** الصور بتتخزن مؤقتًا في الذاكرة وبترفع بعد ما الزيارة تتسجل */
+A.visitPhotoPick = async (input) => {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  input.value = '';
+  const max = Number(((S.data && S.data.settings) || {}).MAX_VISIT_PHOTOS) || 3;
+  A._visitPhotos = A._visitPhotos || [];
+  if (A._visitPhotos.length >= max) return toast('أقصى عدد صور ' + max, 'err');
+  try {
+    const data = await shrinkImage(file, 1200, 0.7);
+    A._visitPhotos.push(data);
+    const box = document.getElementById('v-photos');
+    box.innerHTML = A._visitPhotos.map((d, i) =>
+      `<div class="thumb"><img src="${d}"><button type="button" onclick="A.visitPhotoDel(${i})">✕</button></div>`).join('');
+    toast('📷 الصورة جاهزة — هترفع مع الزيارة', 'ok');
+  } catch (e) { toast(e.message || 'مشكلة في الصورة', 'err'); }
+};
+A.visitPhotoDel = (i) => {
+  A._visitPhotos.splice(i, 1);
+  document.getElementById('v-photos').innerHTML = A._visitPhotos.map((d, k) =>
+    `<div class="thumb"><img src="${d}"><button type="button" onclick="A.visitPhotoDel(${k})">✕</button></div>`).join('');
+};
+
 A.checkoutSave = async () => {
+  stopMic();
   const lv = S.liveVisit;
   const c = custById(lv.customer_id);
   const form = {
     status: $('#v-status').value, outcome: $('#v-outcome').value,
     report: $('#v-report').value.trim(), next_action: $('#v-next').value.trim(), next_action_date: $('#v-next-date').value
   };
+  const photos = (A._visitPhotos || []).slice();
   const outTime = new Date().toTimeString().slice(0, 5);
   if (S.myPos) pushTrackPoint(S.myPos.lat, S.myPos.lng, S.myPos.acc, 'انصراف: ' + (c ? c.name : ''));
   closeModal();
@@ -545,6 +674,14 @@ A.checkoutSave = async () => {
     if (lv.local || !lv.visit_id) throw { offline: true };
     await api('checkout', Object.assign({ visit_id: lv.visit_id }, form));
     toast('✅ الزيارة اتسجلت بنجاح', 'ok');
+    // رفع الصور بعد ما الزيارة اتسجلت
+    for (let i = 0; i < photos.length; i++) {
+      try {
+        toast('⏳ برفع صورة ' + (i + 1) + ' من ' + photos.length);
+        await uploadAttachment('visit', lv.visit_id, 'photo', photos[i]);
+      } catch (e) { toast('صورة ' + (i + 1) + ' مترفعتش: ' + (e.msg || ''), 'err'); }
+    }
+    if (photos.length) toast('📷 الصور اترفعت', 'ok');
   } catch (e) {
     if (e.offline) {
       const [h1, m1] = lv.checkin_time.split(':').map(Number);
@@ -614,6 +751,10 @@ A.custDetails = (id) => {
       <div class="stat-line"><span>آخر زيارة</span><b>${esc(c.last_visit_date || 'لم يُزر')}</b></div>
     </div>
     <div class="flex mt">
+      ${featureOn('ORDER_ENABLED') ? `<button class="btn sm" onclick="A.orderForm('${c.id}')">🛒 طلب جديد</button>` : ''}
+      ${featureOn('COLLECT_ENABLED') ? `<button class="btn sm green" onclick="A.collectForm('${c.id}')">💵 سند قبض</button>` : ''}
+    </div>
+    <div class="flex mt">
       <button class="btn sm green" onclick="A.closeModal();A.checkin('${c.id}')">✔ تسجيل وصول</button>
       <button class="btn sm amber" onclick="A.quickCall('${c.id}')">📞 زيارة هاتفية</button>
       <button class="btn sm ghost" onclick="A.pickLocForCustomer('${c.id}', false)">📍 ${c.lat ? 'عدّل' : 'حدد'} اللوكيشن</button>
@@ -639,6 +780,7 @@ A.quickCall = (custId) => {
     </select>
     <label>التقرير</label>
     <textarea id="v-report" rows="3" placeholder="اتفقنا على إيه؟"></textarea>
+    ${micButton('v-report')}
     <div class="modal-actions">
       <button class="btn green" onclick="A.quickCallSave('${c.id}')">حفظ ✔</button>
       <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
@@ -788,6 +930,16 @@ function viewMe() {
         ${k.collectionTarget ? '<div class="bar"><i style="width:' + Math.min(100, k.collectedMonth / k.collectionTarget * 100) + '%"></i></div>' : ''}</div>
     </div>
     <div class="card">
+      <h3>🏆 ترتيبك بين المناديب</h3>
+      <p class="muted">شوف مركزك في الزيارات والتغطية والتحصيل.</p>
+      <button class="btn sm amber mt" onclick="A.leaderboard('week')">اعرض الترتيب</button>
+    </div>
+    <div class="card">
+      <h3>💰 عهدتك</h3>
+      <p class="muted">التحصيلات الكاش اللي لسه متوردتش للإدارة.</p>
+      <button class="btn sm green mt" onclick="A.myCash()">اعرض عهدتي</button>
+    </div>
+    <div class="card">
       <h3>📍 تتبع خط السير</h3>
       <div class="stat-line"><span>الحالة</span>
         <b>${TRK.denied ? '<span style="color:var(--red)">⚠️ إذن الموقع مرفوض</span>'
@@ -808,15 +960,16 @@ function viewMe() {
 // ================== واجهة الأدمن ==================
 function viewAdmin() {
   const tabs = [
-    ['dash', '📊 اللوحة'], ['daily', '📍 التقرير اليومي'], ['customers', '👥 العملاء'],
-    ['team', '🧑‍💼 المناديب والمناطق'], ['leads', '🎯 الليدز'], ['entries', '📒 القيود اليومية'],
-    ['targets', '🏁 الأهداف'], ['reports', '📄 التقارير'], ['settings', '⚙️ الإعدادات']
+    ['dash', '📊 اللوحة'], ['daily', '📍 التقرير اليومي'], ['sales', '🛒 الطلبات والتحصيلات'],
+    ['customers', '👥 العملاء'], ['team', '🧑‍💼 المناديب والمناطق'], ['leads', '🎯 الليدز'],
+    ['entries', '📒 القيود اليومية'], ['targets', '🏁 الأهداف'], ['reports', '📄 التقارير'],
+    ['settings', '⚙️ الإعدادات']
   ];
   let body = '';
   if (!S.data) body = '<div class="empty"><div class="big">⏳</div>بيحمل البيانات...<br><button class="btn mt" onclick="A.doRefresh()">حاول تاني</button></div>';
   else body = {
-    dash: adDash, daily: adDaily, customers: adCustomers, team: adTeam, leads: adLeads, entries: adEntries,
-    targets: adTargets, reports: adReports, settings: adSettings
+    dash: adDash, daily: adDaily, sales: adSales, customers: adCustomers, team: adTeam, leads: adLeads,
+    entries: adEntries, targets: adTargets, reports: adReports, settings: adSettings
   }[S.adminTab]();
   return topbar('لوحة تحكم الأدمن') +
     '<div class="admin-tabs">' + tabs.map(t =>
@@ -893,12 +1046,13 @@ function adDash() {
     </table></div>
     <div class="section-title"><span>آخر الزيارات</span></div>
     <div class="table-wrap"><table>
-      <tr><th>التاريخ</th><th>المندوب</th><th>العميل</th><th>الحالة</th><th>النتيجة</th><th>المدة</th></tr>
+      <tr><th>التاريخ</th><th>المندوب</th><th>العميل</th><th>الحالة</th><th>النتيجة</th><th>المدة</th><th>مرفقات</th></tr>
       ${visits.slice(-15).reverse().map(v => `<tr>
         <td>${esc(String(v.date).slice(0, 10))}</td><td>${esc(v.rep_name)}</td><td>${esc(v.customer_name)}</td>
         <td><span class="badge ${v.status === 'تمت' ? 'cool' : 'gray'}">${esc(v.status)}</span></td>
         <td>${esc(v.outcome || '—')}</td><td>${v.duration_min ? v.duration_min + ' د' : '—'}</td>
-      </tr>`).join('') || '<tr><td colspan="6" class="muted">لسه مفيش زيارات</td></tr>'}
+        <td>${attachLinks(v)}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">لسه مفيش زيارات</td></tr>'}
     </table></div>`;
 }
 
@@ -928,6 +1082,7 @@ function adDaily() {
       </div>
       <div class="flex" style="margin-bottom:10px">
         <button class="btn ghost sm" onclick="A.sendSummaryNow()">📲 ابعتلي التقرير على تليجرام دلوقتي</button>
+        <button class="btn amber sm" onclick="A.leaderboard('week')">🏆 ترتيب المناديب</button>
       </div>
       <div class="table-wrap"><table>
         <tr><th>المندوب</th><th>المنطقة</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
@@ -1043,6 +1198,237 @@ A.exportDaily = () => {
     'عملاء متزاروش': r.missed.join(' | ')
   }));
   downloadCsv('التقرير_اليومي_' + S.daily.date, rows);
+};
+
+// ----- الطلبات والتحصيلات (أدمن) -----
+function adSales() {
+  const d = S.sales;
+  if (!d) {
+    A.loadSales();
+    return '<div class="empty"><div class="big">⏳</div>بيحمل الطلبات والتحصيلات...</div>';
+  }
+  const orders = (d.orders || []).slice().reverse();
+  const cols = (d.collections || []).slice().reverse();
+  const pending = orders.filter(o => o.status !== 'مرسل').length + cols.filter(c => c.status !== 'مرسل').length;
+  const totalOrders = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+  const totalCols = cols.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const sub = S.salesTab || 'orders';
+
+  return `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="num">${orders.length}</div><div class="lbl">طلب مسجل</div></div>
+      <div class="kpi"><div class="num">${money(totalOrders)}</div><div class="lbl">قيمة الطلبات (${esc(d.currency)})</div></div>
+      <div class="kpi"><div class="num" style="color:var(--green)">${money(totalCols)}</div><div class="lbl">إجمالي التحصيلات</div></div>
+      <div class="kpi"><div class="num" style="color:${pending ? 'var(--amber)' : 'var(--green)'}">${pending}</div><div class="lbl">مستني الإرسال لقيود</div></div>
+    </div>
+    ${pending ? `<button class="btn amber full" onclick="A.pushPending()">📤 ابعت كل المعلق لقيود (${pending})</button><div class="mt"></div>` : ''}
+    <div class="pill-row">
+      <button class="pill ${sub === 'orders' ? 'active' : ''}" onclick="A.salesTab('orders')">🛒 الطلبات</button>
+      <button class="pill ${sub === 'collections' ? 'active' : ''}" onclick="A.salesTab('collections')">💵 التحصيلات</button>
+      <button class="pill ${sub === 'cash' ? 'active' : ''}" onclick="A.salesTab('cash')">💰 عهد المناديب</button>
+    </div>
+    ${sub === 'orders' ? `
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+        ${orders.map(o => `<tr>
+          <td>${esc(String(o.date).slice(0, 10))} <span class="muted">${esc(o.time || '')}</span></td>
+          <td><b>${esc(o.customer_name)}</b></td>
+          <td>${esc(o.rep_name)}</td>
+          <td>${o.items_count}</td>
+          <td><b>${money(o.total)}</b></td>
+          <td>${statusBadge(o.status, o.error)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn sm ghost" onclick="A.orderView('${o.id}')">تفاصيل</button>
+            ${o.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushOrder('${o.id}')">📤 ابعت</button>` : ''}
+          </td></tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش طلبات لسه</td></tr>'}
+      </table></div>`
+    : sub === 'collections' ? `
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
+        ${cols.map(c => `<tr>
+          <td>${esc(String(c.date).slice(0, 10))} <span class="muted">${esc(c.time || '')}</span></td>
+          <td><b>${esc(c.customer_name)}</b></td>
+          <td>${esc(c.rep_name)}</td>
+          <td><b style="color:var(--green)">${money(c.amount)}</b></td>
+          <td>${esc(c.method)}</td>
+          <td>${esc(c.reference || '—')}${c.signature ? ' ' + attachLinks({ signature: c.signature }) : ''}</td>
+          <td>${statusBadge(c.status, c.error)}</td>
+          <td>${c.settlement_id ? '<span class="badge cool">اتورد</span>' : (c.method === 'كاش' ? '<span class="badge warm">في العهدة</span>' : '—')}</td>
+          <td>${c.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushCollection('${c.id}')">📤 ابعت</button>` : ''}</td>
+        </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش تحصيلات لسه</td></tr>'}
+      </table></div>`
+    : `
+      <div class="table-wrap"><table>
+        <tr><th>المندوب</th><th>رصيد بداية</th><th>+ تحصيلات</th><th>− مصروفات</th><th>= اللي معاه</th><th>الصرف</th><th></th></tr>
+        ${(d.repCash || []).map(r => `<tr>
+          <td><b>${esc(r.rep_name)}</b></td>
+          <td>${money(r.opening)}${r.openingDate ? '<div class="muted" style="font-size:11px">' + esc(r.openingDate) + '</div>' : ''}</td>
+          <td class="pos">${money(r.collections)}</td>
+          <td class="neg">${money(r.expenses)}</td>
+          <td><b style="color:${r.cash ? 'var(--amber)' : 'inherit'}">${money(r.cash)} ${esc(d.currency)}</b></td>
+          <td>${r.canSpend ? '<span class="badge warm">مسموح</span>' : '<span class="badge gray">ممنوع</span>'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn sm ghost" onclick="A.openingForm('${r.rep_id}','${esc(r.rep_name)}',${r.opening})">رصيد بداية</button>
+            ${(r.cash || r.count) ? `<button class="btn sm green" onclick="A.settleForm('${r.rep_id}','${esc(r.rep_name)}',${r.cash})">✔ استلام</button>` : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش مناديب</td></tr>'}
+      </table></div>
+      <div class="section-title"><span>المصروفات (${(d.expenses || []).length})</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>المندوب</th><th>النوع</th><th>المبلغ</th><th>البيان</th><th>الحالة</th><th></th></tr>
+        ${(d.expenses || []).slice().reverse().slice(0, 60).map(e => `<tr>
+          <td>${esc(String(e.date).slice(0, 10))}</td><td>${esc(e.rep_name)}</td>
+          <td><span class="badge info">${esc(e.category)}</span></td>
+          <td><b class="neg">${money(e.amount)}</b></td>
+          <td>${esc(e.description || '')}</td>
+          <td>${e.settlement_id ? '<span class="badge cool">اتقفل</span>' : '<span class="badge warm">مفتوح</span>'}</td>
+          <td>${e.settlement_id ? '' : `<button class="btn sm red" onclick="A.deleteExpense('${e.id}')">حذف</button>`}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش مصروفات</td></tr>'}
+      </table></div>
+      <div class="section-title"><span>سجل التوريدات</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>المندوب</th><th>رصيد بداية</th><th>تحصيلات</th><th>مصروفات</th><th>المستحق</th><th>المستلم</th><th>الباقي</th><th>استلمها</th></tr>
+        ${(d.settlements || []).slice().reverse().map(s => `<tr>
+          <td>${esc(String(s.date).slice(0, 10))}</td><td>${esc(s.rep_name)}</td>
+          <td>${money(s.opening)}</td><td class="pos">${money(s.collections_total)}</td>
+          <td class="neg">${money(s.expenses_total)}</td><td>${money(s.balance)}</td>
+          <td><b>${money(s.amount)}</b></td>
+          <td>${Number(s.carried) ? '<span class="badge warm">' + money(s.carried) + '</span>' : '—'}</td>
+          <td>${esc(s.admin_name || '')}</td>
+        </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش توريدات</td></tr>'}
+      </table></div>`}`;
+}
+
+/** روابط الصور والتوقيع في جداول الأدمن */
+function attachLinks(row) {
+  const photos = String(row.photos || '').split(',').filter(Boolean);
+  const sig = row.signature;
+  if (!photos.length && !sig) return '<span class="muted">—</span>';
+  let h = '';
+  if (photos.length) h += `<button class="btn sm ghost" onclick="A.viewAttachments('${esc(JSON.stringify(photos).replace(/'/g, ''))}')">📷 ${photos.length}</button>`;
+  if (sig) h += `<button class="btn sm ghost" onclick="A.viewAttachments('${esc(JSON.stringify([sig]).replace(/'/g, ''))}')">✍️</button>`;
+  return h;
+}
+A.viewAttachments = (json) => {
+  let urls = [];
+  try { urls = JSON.parse(json); } catch (e) { return; }
+  openModal(`
+    <h2>📎 المرفقات</h2>
+    <div class="attach-grid">${urls.map(u =>
+      `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" alt="مرفق"></a>`).join('')}</div>
+    <p class="muted mt">اضغط على الصورة لفتحها بالحجم الكامل على درايف.</p>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+};
+
+function statusBadge(st, err) {
+  if (st === 'مرسل') return '<span class="badge cool">✅ في قيود</span>';
+  if (st === 'فشل') return '<span class="badge hot" title="' + esc(err || '') + '">❌ فشل</span>';
+  return '<span class="badge warm">⏳ مستني</span>';
+}
+
+A.salesTab = (t) => { S.salesTab = t; render(); };
+A.loadSales = async () => {
+  if (A._salesLoading) return;
+  A._salesLoading = true;
+  try { const r = await api('salesData', {}); S.sales = r; render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  finally { A._salesLoading = false; }
+};
+A.orderView = async (id) => {
+  try {
+    const r = await api('orderItems', { id: id });
+    const o = r.order;
+    openModal(`
+      <h2>🛒 طلب ${esc(o.customer_name)}</h2>
+      <p class="modal-sub">${esc(String(o.date).slice(0, 10))} • المندوب ${esc(o.rep_name)} • ${statusBadge(o.status, o.error)}</p>
+      ${o.error ? '<div class="card" style="border-right:4px solid var(--red)"><b>سبب الفشل:</b><div class="muted">' + esc(o.error) + '</div></div>' : ''}
+      <div class="table-wrap"><table>
+        <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>
+        ${r.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.sku || '')}</div></td>
+          <td>${i.qty}</td><td>${money(i.price)}</td><td><b>${money(i.total)}</b></td></tr>`).join('')}
+      </table></div>
+      <div class="card mt">
+        <div class="stat-line"><span>قبل الضريبة</span><b>${money(o.subtotal)} ${esc(r.currency)}</b></div>
+        <div class="stat-line"><span>الضريبة</span><b>${money(o.vat)}</b></div>
+        <div class="stat-line"><span><b>الإجمالي</b></span><b>${money(o.total)}</b></div>
+      </div>
+      ${o.notes ? '<div class="card"><b>ملاحظات:</b> ' + esc(o.notes) + '</div>' : ''}
+      <div class="modal-actions">
+        ${o.status !== 'مرسل' ? `<button class="btn" onclick="A.closeModal();A.pushOrder('${o.id}')">📤 ابعت لقيود</button>
+        <button class="btn red" onclick="A.deleteOrder('${o.id}')">حذف</button>` : ''}
+        <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
+      </div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.pushOrder = async (id) => {
+  toast('⏳ ببعت لقيود...');
+  try { const r = await api('pushOrder', { id: id }); toast(r.message, 'ok'); A.loadSales(); }
+  catch (e) { toast(e.msg || 'فشل الإرسال', 'err'); A.loadSales(); }
+};
+A.pushCollection = async (id) => {
+  toast('⏳ ببعت لقيود...');
+  try { const r = await api('pushCollection', { id: id }); toast(r.message, 'ok'); A.loadSales(); }
+  catch (e) { toast(e.msg || 'فشل الإرسال', 'err'); A.loadSales(); }
+};
+A.pushPending = async () => {
+  toast('⏳ ببعت المعلق... ممكن ياخد دقيقة');
+  try {
+    const r = await api('pushPending', {});
+    toast(r.message, r.errors && r.errors.length ? 'err' : 'ok');
+    if (r.errors && r.errors.length) alert('فشل إرسال:\n' + r.errors.join('\n'));
+    A.loadSales();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.deleteOrder = async (id) => {
+  if (!confirm('متأكد من حذف الطلب؟')) return;
+  closeModal();
+  try { await api('deleteOrder', { id: id }); toast('اتحذف', 'ok'); A.loadSales(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.settleForm = (repId, name, balance) => {
+  openModal(`
+    <h2>✔ استلام عهدة: ${esc(name)}</h2>
+    <p class="modal-sub">المستحق عليه دلوقتي: <b>${money(balance)} ${esc(S.sales.currency)}</b></p>
+    <label>المبلغ اللي استلمته</label>
+    <input id="st-amount" type="text" inputmode="decimal" value="${balance}">
+    <p class="muted">لو استلمت جزء بس، الباقي هيتحول تلقائي لرصيد بداية جديد عنده.</p>
+    <label>ملاحظات</label><input id="st-note" placeholder="رقم الإيصال أو أي ملاحظة">
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.settleCash('${repId}')">تأكيد الاستلام ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.settleCash = async (repId) => {
+  const payload = { rep_id: repId, amount: normDigits($('#st-amount').value), note: $('#st-note').value.trim() };
+  closeModal();
+  try { const r = await api('settleCash', payload); toast(r.message, 'ok'); A.loadSales(); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.openingForm = (repId, name, current) => {
+  openModal(`
+    <h2>💼 رصيد بداية المدة: ${esc(name)}</h2>
+    <p class="modal-sub">الفلوس اللي معاه قبل ما النظام يبدأ يحسب — عشان العهدة تسمع صح.</p>
+    <label>المبلغ (${esc(S.sales.currency)})</label>
+    <input id="op-amount" type="text" inputmode="decimal" value="${current || 0}">
+    <label>تاريخ بداية المدة</label>
+    <input id="op-date" type="date" value="${new Date().toISOString().slice(0, 10)}">
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.openingSave('${repId}')">حفظ ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.openingSave = async (repId) => {
+  const payload = { rep_id: repId, amount: normDigits($('#op-amount').value), date: $('#op-date').value };
+  closeModal();
+  try { const r = await api('setCashOpening', payload); toast(r.message, 'ok'); A.loadSales(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.deleteExpense = async (id) => {
+  if (!confirm('متأكد من حذف المصروف ده؟')) return;
+  try { await api('deleteExpense', { id: id }); toast('اتحذف', 'ok'); A.loadSales(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 // ================== استيراد وتحديث من ملف Excel/CSV ==================
@@ -1248,6 +1634,8 @@ A.custForm = (id) => {
         <input id="c-terms" type="number" min="0" value="${esc(c.payment_terms || '')}"
           placeholder="الافتراضي ${esc(defaultTerms())} يوم"></div>
     </div>
+    <label>حد الائتمان (${esc(cur())}) — 0 أو فاضي = مفيش حد</label>
+    <input id="c-credit" type="number" min="0" value="${esc(c.credit_limit || '')}">
     <label>كود قيود (اختياري)</label><input id="c-qoyod" value="${esc(c.qoyod_id || '')}">
     <p class="muted">الفاتورة بتعتبر متأخرة بعد ${esc(c.payment_terms || defaultTerms())} يوم من تاريخ إصدارها. سيبها فاضية عشان تمشي على الافتراضي.</p>
     <button class="btn ghost sm mt" onclick="A.adCustLoc('${id || ''}')">📍 ${c.lat ? 'تعديل اللوكيشن (متحدد ✅)' : 'تحديد اللوكيشن على الخريطة'}</button>
@@ -1276,7 +1664,7 @@ A.custSave = async (id) => {
     id: id || undefined, name: $('#c-name').value.trim(), phone: $('#c-phone').value.trim(),
     address: $('#c-address').value.trim(), region_id: $('#c-region').value, visit_day: $('#c-day').value,
     status: $('#c-status').value, qoyod_id: $('#c-qoyod').value.trim(),
-    payment_terms: $('#c-terms').value
+    payment_terms: $('#c-terms').value, credit_limit: $('#c-credit').value
   };
   if (A._custLoc) { data.lat = A._custLoc.lat; data.lng = A._custLoc.lng; }
   if (!data.name) return toast('اكتب اسم العميل', 'err');
@@ -1353,7 +1741,8 @@ function adTeam() {
         <td><b>${esc(u.name)}</b></td><td>${esc(u.username)}</td>
         <td>${u.role === 'admin' ? '<span class="badge info">أدمن</span>' : 'مندوب'}</td>
         <td>${esc(regionName(u.region_id))}</td>
-        <td>${String(u.active) === 'FALSE' ? '<span class="badge gray">موقوف</span>' : '<span class="badge cool">نشط</span>'}</td>
+        <td>${String(u.active) === 'FALSE' ? '<span class="badge gray">موقوف</span>' : '<span class="badge cool">نشط</span>'}
+          ${String(u.can_spend).toUpperCase() === 'TRUE' ? '<span class="badge warm">يصرف من العهدة</span>' : ''}</td>
         <td>${esc(u.telegram_chat_id || '—')}</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="A.userForm('${u.id}')">تعديل</button>
           <button class="btn sm outline" onclick="A.revokeSessions('${u.id}','${esc(u.name)}')" title="إنهاء جلساته على كل الأجهزة">🔒</button></td>
@@ -1399,6 +1788,8 @@ A.userForm = (id) => {
         ${regions.map(r => `<option value="${r.id}" ${String(u.region_id) === String(r.id) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
     </div>
     <label><input type="checkbox" id="u-active" ${String(u.active) !== 'FALSE' ? 'checked' : ''} style="width:auto"> الحساب نشط</label>
+    <label><input type="checkbox" id="u-spend" ${String(u.can_spend).toUpperCase() === 'TRUE' ? 'checked' : ''} style="width:auto"> يقدر يصرف من فلوس العهدة</label>
+    <p class="muted">لو مفعّلة، المندوب يقدر يسجل مصروفات (بنزين، صيانة...) بتنزل من عهدته فورًا.</p>
     <div class="modal-actions">
       <button class="btn green" onclick="A.userSave('${id || ''}')">حفظ ✔</button>
       <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
@@ -1408,7 +1799,7 @@ A.userSave = async (id) => {
   const data = {
     id: id || undefined, name: $('#u-name').value.trim(), username: normDigits($('#u-username').value).toLowerCase(),
     pin: normDigits($('#u-pin').value), role: $('#u-role').value, region_id: $('#u-region').value,
-    active: $('#u-active').checked
+    active: $('#u-active').checked, can_spend: $('#u-spend').checked
   };
   if (!data.name || !data.username) return toast('كمّل البيانات', 'err');
   closeModal();
@@ -1757,6 +2148,34 @@ function adSettings() {
       <p class="muted mt">المزامنة بتشتغل لوحدها كل ساعة: فواتير + مرتجعات + تحصيلات، وبتحدث أرصدة العملاء وأولوياتهم.</p>
     </div>
     <div class="card">
+      <h3>🛒 الطلبات والتحصيلات</h3>
+      <div class="grid2">
+        <label><input type="checkbox" id="s-order-on" ${String(s.ORDER_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? 'checked' : ''} style="width:auto"> السماح للمناديب بأخذ طلبات</label>
+        <label><input type="checkbox" id="s-collect-on" ${String(s.COLLECT_ENABLED || 'TRUE').toUpperCase() !== 'FALSE' ? 'checked' : ''} style="width:auto"> السماح بتسجيل تحصيلات</label>
+      </div>
+      <label><input type="checkbox" id="s-autopush" ${String(s.AUTO_PUSH || 'FALSE').toUpperCase() === 'TRUE' ? 'checked' : ''} style="width:auto"> إرسال تلقائي لقيود من غير مراجعتك</label>
+      <div class="grid2">
+        <div><label>مسار عروض الأسعار</label><input id="s-quote-path" value="${esc(s.QOYOD_QUOTE_PATH || '/estimates')}" style="direction:ltr"></div>
+        <div><label>مسار سندات القبض</label><input id="s-receipt-path" value="${esc(s.QOYOD_RECEIPT_PATH || '/receipts')}" style="direction:ltr"></div>
+      </div>
+      <div class="grid2">
+        <div><label>مسار الأصناف</label><input id="s-products-path" value="${esc(s.QOYOD_PRODUCTS_PATH || '/products')}" style="direction:ltr"></div>
+        <div><label>كود حساب الصندوق في قيود</label><input id="s-cash-account" value="${esc(s.QOYOD_CASH_ACCOUNT_ID || '')}" style="direction:ltr"></div>
+      </div>
+      <div><label>نسبة الضريبة %</label><input id="s-vat" type="number" value="${esc(s.VAT_PERCENT || 15)}"></div>
+      <div class="grid2">
+        <div><label>حد ائتمان افتراضي (0 = مفيش)</label><input id="s-credit-default" type="number" value="${esc(s.CREDIT_LIMIT_DEFAULT || 0)}"></div>
+        <div><label>أقصى عدد صور للزيارة</label><input id="s-max-photos" type="number" value="${esc(s.MAX_VISIT_PHOTOS || 3)}"></div>
+      </div>
+      <label><input type="checkbox" id="s-credit-block" ${String(s.CREDIT_BLOCK || 'FALSE').toUpperCase() === 'TRUE' ? 'checked' : ''} style="width:auto"> امنع الطلب لو تعدى حد الائتمان (بدل التحذير بس)</label>
+      <label><input type="checkbox" id="s-credit-overdue" ${String(s.CREDIT_BLOCK_OVERDUE || 'FALSE').toUpperCase() === 'TRUE' ? 'checked' : ''} style="width:auto"> امنع الطلب لو العميل عليه متأخرات</label>
+      <div class="flex mt">
+        <button class="btn ghost" onclick="A.qoyodProbe()">🔬 افحص مسارات قيود</button>
+        <button class="btn ghost" onclick="A.syncProductsNow()">⬇️ اسحب الأصناف من قيود</button>
+      </div>
+      <p class="muted mt">الطلبات بتترسل كـ <b>عروض أسعار</b> مش فواتير. لو الإرسال فشل، افحص المسارات وظبطها من هنا.</p>
+    </div>
+    <div class="card">
       <h3>📲 بوت تليجرام</h3>
       <label>Bot Token (من BotFather)</label><input id="s-tg" value="${esc(s.TELEGRAM_BOT_TOKEN || '')}" style="direction:ltr">
       <div class="flex mt">
@@ -1785,11 +2204,11 @@ function adSettings() {
       </div>
       <label>لوجو الشركة</label>
       <div class="logo-box">
-        <div id="logo-preview">${s.COMPANY_LOGO ? '<img src="' + s.COMPANY_LOGO + '" alt="">' : '<span class="muted">مفيش لوجو مرفوع</span>'}</div>
+        <div id="logo-preview">${logoSrc() ? '<img src="' + logoSrc() + '" alt="">' : '<span class="muted">مفيش لوجو مرفوع</span>'}</div>
         <div>
           <input type="file" id="s-logo-file" accept="image/*" onchange="A.logoPick(this)" style="display:none">
           <button class="btn sm ghost" onclick="document.getElementById('s-logo-file').click()">📤 اختار صورة اللوجو</button>
-          ${s.COMPANY_LOGO ? '<button class="btn sm red" onclick="A.logoRemove()">حذف اللوجو</button>' : ''}
+          ${logoSrc() ? '<button class="btn sm red" onclick="A.logoRemove()">حذف اللوجو</button>' : ''}
           <p class="muted" style="margin-top:6px">الصورة بتتصغّر تلقائيًا. هتظهر في شاشة الدخول وفوق في التطبيق وفي كشوف الحساب.</p>
         </div>
       </div>
@@ -1818,6 +2237,32 @@ function adSettings() {
       <p class="muted">الفاتورة بتعتبر متأخرة بعد المدة دي من تاريخ إصدارها. دي المدة الافتراضية — تقدر تحدد مدة مختلفة لكل عميل من صفحة العملاء.</p>
     </div>
     <div class="card">
+      <h3>💾 النسخ الاحتياطي</h3>
+      <div class="stat-line"><span>آخر نسخة</span><b>${esc(s.LAST_BACKUP || 'لسه متعملتش')}</b></div>
+      <div><label>عدد النسخ المحتفظ بيها</label><input id="s-backup-keep" type="number" min="3" value="${esc(s.BACKUP_KEEP || 30)}"></div>
+      <div class="flex mt">
+        <button class="btn green" onclick="A.backupNow()">💾 خد نسخة دلوقتي</button>
+        <button class="btn ghost" onclick="A.backupList()">📂 النسخ المحفوظة</button>
+      </div>
+      <p class="muted mt">بتتاخد نسخة كاملة كل يوم 2 فجرًا في فولدر على درايف بتاعك اسمه "CRM Rawafed — نسخ احتياطية".</p>
+    </div>
+    <div class="card">
+      <h3>🩺 صحة النظام</h3>
+      <div id="health-box" class="muted">اضغط للفحص — بيراجع المزامنة والنسخ الاحتياطي ونشاط المناديب والبيانات الناقصة.</div>
+      <button class="btn amber mt" onclick="A.runHealth()">🩺 افحص النظام دلوقتي</button>
+      <p class="muted mt">الفحص بيتعمل تلقائي كل يوم 9 مساءً، وأي مشكلة بتوصلك على تليجرام.</p>
+    </div>
+    <div class="card">
+      <h3>🗄️ الأرشفة وأحجام البيانات</h3>
+      <div class="stat-line"><span>آخر أرشفة</span><b>${esc(s.LAST_ARCHIVE || 'لسه متعملتش')}</b></div>
+      <div><label>أرشفة البيانات الأقدم من (يوم)</label><input id="s-archive-days" type="number" min="60" value="${esc(s.ARCHIVE_AFTER_DAYS || 365)}"></div>
+      <div class="flex mt">
+        <button class="btn amber" onclick="A.archiveNow()">🗄️ أرشف دلوقتي</button>
+        <button class="btn ghost" onclick="A.dataSizes()">📊 أحجام الجداول</button>
+      </div>
+      <p class="muted mt">البيانات القديمة بتتنقل لجداول أرشيف في نفس الملف (مش بتتمسح) عشان النظام يفضل سريع. بتشتغل تلقائي أول كل شهر.</p>
+    </div>
+    <div class="card">
       <h3>📋 سجل النظام</h3>
       ${(S.data.log || []).slice().reverse().slice(0, 10).map(l =>
         `<div class="stat-line"><span class="muted">${esc(l.time)}</span><span>${esc(l.message)}</span></div>`).join('') || '<p class="muted">فاضي</p>'}
@@ -1831,12 +2276,31 @@ A.saveSettings = async () => {
     CURRENCY: $('#s-currency').value, PAYMENT_TERMS_DAYS: $('#s-terms').value,
     TRACK_ENABLED: $('#s-track').checked ? 'TRUE' : 'FALSE',
     TRACK_MIN_MINUTES: $('#s-track-min').value, TRACK_MIN_METERS: $('#s-track-m').value,
-    TRACK_KEEP_DAYS: $('#s-track-keep').value
+    TRACK_KEEP_DAYS: $('#s-track-keep').value, BACKUP_KEEP: $('#s-backup-keep').value,
+    ARCHIVE_AFTER_DAYS: $('#s-archive-days').value,
+    ORDER_ENABLED: $('#s-order-on').checked ? 'TRUE' : 'FALSE',
+    COLLECT_ENABLED: $('#s-collect-on').checked ? 'TRUE' : 'FALSE',
+    AUTO_PUSH: $('#s-autopush').checked ? 'TRUE' : 'FALSE',
+    QOYOD_QUOTE_PATH: $('#s-quote-path').value.trim(),
+    QOYOD_RECEIPT_PATH: $('#s-receipt-path').value.trim(),
+    QOYOD_PRODUCTS_PATH: $('#s-products-path').value.trim(),
+    QOYOD_CASH_ACCOUNT_ID: $('#s-cash-account').value.trim(),
+    VAT_PERCENT: $('#s-vat').value,
+    CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
+    CREDIT_BLOCK: $('#s-credit-block').checked ? 'TRUE' : 'FALSE',
+    CREDIT_BLOCK_OVERDUE: $('#s-credit-overdue').checked ? 'TRUE' : 'FALSE',
+    MAX_VISIT_PHOTOS: $('#s-max-photos').value
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
     await api('saveSettings', { data });
-    A._newLogo = undefined;
+    // اللوجو الجديد يتخزن محليًا على طول من غير ما نجيبه تاني من السيرفر
+    if (A._newLogo !== undefined) {
+      if (A._newLogo) localStorage.setItem('crm_logo', A._newLogo);
+      else localStorage.removeItem('crm_logo');
+      localStorage.removeItem('crm_logo_hash');   // يتظبط لوحده مع أول تحديث
+      A._newLogo = undefined;
+    }
     toast('✅ الإعدادات اتحفظت', 'ok');
     refresh(true);
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
@@ -1900,6 +2364,104 @@ async function pollSyncStatus(n) {
   } catch (e) { /* نكمل محاولة */ }
   setTimeout(() => pollSyncStatus(n + 1), 4000);
 }
+// ----- فحص مسارات قيود وسحب الأصناف -----
+A.qoyodProbe = async () => {
+  toast('⏳ بفحص حسابك في قيود...');
+  try {
+    const r = await api('qoyodProbe', {});
+    openModal(`
+      <h2>🔬 فحص مسارات قيود</h2>
+      <p class="modal-sub">دي المسارات اللي ردّت من حسابك، وأسامي الحقول الحقيقية اللي بيرجعها.</p>
+      ${r.results.map(x => `
+        <div class="card" style="border-right:4px solid ${x.ok ? 'var(--green)' : 'var(--red)'}">
+          <b>${esc(x.label)}</b> — <span style="direction:ltr;display:inline-block">${esc(x.path)}</span>
+          ${x.ok ? `<div class="stat-line"><span>عدد السجلات في العينة</span><b>${x.count}</b></div>
+            <div class="muted mt"><b>الحقول:</b> ${esc(x.fields)}</div>
+            ${x.sample ? '<div class="muted mt" style="direction:ltr;font-size:11px;word-break:break-all">' + esc(x.sample) + '</div>' : ''}`
+          : `<div style="color:var(--red)">${esc(x.error)}</div>`}
+        </div>`).join('')}
+      <div class="card"><b>ازاي أستفيد؟</b>
+        <p class="muted">لو مسار ظهر بعلامة حمرا، غيّره من خانة الإعدادات للمسار الصح. ولو الإرسال فشل بسبب اسم حقل،
+        انسخ سطر "الحقول" وابعتهولي وأنا أظبط الإرسال عليه.</p></div>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ في الفحص', 'err'); }
+};
+
+A.syncProductsNow = async () => {
+  toast('⏳ بسحب الأصناف من قيود...');
+  try {
+    const r = await api('syncProducts', {});
+    toast(r.message, 'ok');
+    localStorage.removeItem('crm_products_v');   // يتحمّل من جديد على الأجهزة
+    refresh(true);
+  } catch (e) { toast(e.msg || 'فشل السحب', 'err'); }
+};
+
+// ----- الأرشفة وأحجام البيانات -----
+A.archiveNow = async () => {
+  if (!confirm('هينقل البيانات القديمة لجداول أرشيف في نفس الملف. نكمل؟')) return;
+  toast('⏳ بيأرشف... ممكن ياخد دقيقة');
+  try { const r = await api('archiveNow', {}); toast(r.message, 'ok'); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.dataSizes = async () => {
+  toast('⏳ بحسب الأحجام...');
+  try {
+    const r = await api('dataSizes', {});
+    const big = r.sizes.filter(x => x.rows > 15000).length;
+    openModal(`
+      <h2>📊 أحجام الجداول</h2>
+      <p class="modal-sub">آخر أرشفة: ${esc(r.lastArchive)}</p>
+      ${big ? '<div class="card" style="border-right:4px solid var(--amber)">⚠️ فيه جداول كبيرة — شغّل الأرشفة عشان الأداء يفضل كويس.</div>' : ''}
+      <div class="table-wrap"><table>
+        <tr><th>الجدول</th><th>صفوف نشطة</th><th>في الأرشيف</th></tr>
+        ${r.sizes.map(x => `<tr>
+          <td>${esc(x.name)}</td>
+          <td><b style="color:${x.rows > 15000 ? 'var(--amber)' : 'inherit'}">${money(x.rows)}</b></td>
+          <td class="muted">${x.archived ? money(x.archived) : '—'}</td>
+        </tr>`).join('')}
+      </table></div>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- النسخ الاحتياطي وصحة النظام -----
+A.backupNow = async () => {
+  toast('⏳ بياخد نسخة... ممكن ياخد دقيقة');
+  try { const r = await api('backupNow', {}); toast(r.message, 'ok'); refresh(true); }
+  catch (e) { toast(e.msg || 'فشل النسخ', 'err'); }
+};
+
+A.backupList = async () => {
+  toast('⏳ بجيب قايمة النسخ...');
+  try {
+    const r = await api('backupList', {});
+    openModal(`
+      <h2>📂 النسخ الاحتياطية (${r.backups.length})</h2>
+      <p class="modal-sub">لو احتجت ترجع لنسخة: افتحها، وبعدين File ← Make a copy، واربط السكريبت بالنسخة الجديدة.</p>
+      <a class="btn ghost full" target="_blank" href="${esc(r.folderUrl)}">📁 افتح فولدر النسخ على درايف</a>
+      <div class="table-wrap mt"><table>
+        <tr><th>التاريخ</th><th>الحجم</th><th></th></tr>
+        ${r.backups.map(b => `<tr><td>${esc(b.date)}</td><td>${esc(b.size)}</td>
+          <td><a class="btn sm outline" target="_blank" href="${esc(b.url)}">فتح</a></td></tr>`).join('')
+          || '<tr><td colspan="3" class="muted">مفيش نسخ لسه — اضغط "خد نسخة دلوقتي"</td></tr>'}
+      </table></div>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.runHealth = async () => {
+  const box = document.getElementById('health-box');
+  box.innerHTML = '⏳ بيفحص...';
+  try {
+    const r = await api('healthCheck', {});
+    box.innerHTML = r.issues.length
+      ? '<div style="border-right:4px solid var(--amber);padding-right:10px">' +
+        r.issues.map(x => '• ' + esc(x)).join('<br>') + '</div>'
+      : '<b style="color:var(--green)">✅ النظام سليم — مفيش أي مشاكل</b>';
+  } catch (e) { box.innerHTML = '<span style="color:var(--red)">' + esc(e.msg || 'خطأ في الفحص') + '</span>'; }
+};
+
 A.testTg = async () => {
   try { const r = await api('testTelegram', {}); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
@@ -2009,6 +2571,453 @@ A.copyDiag = (json) => {
   const txt = typeof json === 'string' ? json : JSON.stringify(json);
   if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => toast('✅ اتنسخ — تقدر تبعته', 'ok'));
   else toast('انسخه يدوي من الشاشة', 'err');
+};
+
+// ================== لوحة تنافس المناديب ==================
+A.leaderboard = async (period) => {
+  S.lbPeriod = period || S.lbPeriod || 'week';
+  S.lbSort = S.lbSort || 'visits';
+  toast('⏳ بجهز الترتيب...');
+  try {
+    const r = await api('leaderboard', { period: S.lbPeriod });
+    S.lb = r;
+    renderLeaderboard();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.lbSort = (key) => { S.lbSort = key; renderLeaderboard(); };
+A.lbPeriod = (p) => { A.leaderboard(p); };
+
+function renderLeaderboard() {
+  const r = S.lb;
+  const key = S.lbSort;
+  const rows = r.rows.slice().sort((a, b) => (Number(b[key]) || 0) - (Number(a[key]) || 0));
+  const medals = ['🥇', '🥈', '🥉'];
+  const metrics = [
+    ['visits', 'الزيارات'], ['coverage', 'التغطية %'],
+    ['collected', 'التحصيلات'], ['netSales', 'صافي المبيعات']
+  ];
+  openModal(`
+    <h2>🏆 ترتيب المناديب</h2>
+    <p class="modal-sub">${esc(r.period)} — من ${esc(r.from)} إلى ${esc(r.to)}</p>
+    <div class="pill-row">
+      <button class="pill ${S.lbPeriod === 'week' ? 'active' : ''}" onclick="A.lbPeriod('week')">الأسبوع</button>
+      <button class="pill ${S.lbPeriod === 'month' ? 'active' : ''}" onclick="A.lbPeriod('month')">الشهر</button>
+    </div>
+    <div class="pill-row">
+      ${metrics.map(m => `<button class="pill ${key === m[0] ? 'active' : ''}" onclick="A.lbSort('${m[0]}')">ترتيب بـ ${m[1]}</button>`).join('')}
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th>#</th><th>المندوب</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>المسافة</th></tr>
+      ${rows.map((x, i) => `<tr ${String(x.rep_id) === String(r.me) ? 'style="background:var(--blue-soft)"' : ''}>
+        <td><b>${medals[i] || (i + 1)}</b></td>
+        <td><b>${esc(x.rep_name)}</b>${x.region ? '<div class="muted" style="font-size:11px">' + esc(x.region) + '</div>' : ''}</td>
+        <td><b>${x.visits}</b></td>
+        <td><span class="badge ${x.coverage >= 80 ? 'cool' : x.coverage >= 50 ? 'warm' : 'hot'}">${x.coverage}%</span>
+          <div class="muted" style="font-size:11px">${x.covered} من ${x.customers}</div></td>
+        <td class="pos">${money(x.collected)}</td>
+        <td>${money(x.netSales)}</td>
+        <td>${x.distanceKm ? x.distanceKm + ' كم' : '—'}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+    </table></div>
+    <p class="muted mt">التغطية = عملاء المنطقة اللي اتزاروا فعليًا في الفترة. التحصيلات والمبيعات من قيود حسب منطقة كل مندوب.</p>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+}
+
+// ================== الكتابة بالصوت ==================
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let _rec = null, _recTarget = null;
+function micButton(targetId) {
+  if (!SR) return '';
+  return `<button type="button" class="btn sm ghost mic-btn" id="mic-${targetId}"
+    onclick="A.mic('${targetId}')">🎤 اكتب بصوتك</button>`;
+}
+A.mic = (targetId) => {
+  const el = document.getElementById(targetId);
+  const btn = document.getElementById('mic-' + targetId);
+  if (!el || !SR) return;
+  if (_rec) { try { _rec.stop(); } catch (e) {} _rec = null; return; }
+
+  const rec = new SR();
+  rec.lang = 'ar-SA';
+  rec.continuous = true;
+  rec.interimResults = true;
+  let base = el.value ? el.value.trim() + ' ' : '';
+  rec.onstart = () => { btn.classList.add('rec'); btn.textContent = '⏹️ وقف التسجيل'; toast('🎤 اتكلم دلوقتي...'); };
+  rec.onresult = (e) => {
+    let text = '';
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    el.value = base + text;
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed') toast('لازم تسمح باستخدام الميكروفون', 'err');
+    else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('مشكلة في التسجيل: ' + e.error, 'err');
+  };
+  rec.onend = () => {
+    _rec = null;
+    if (btn) { btn.classList.remove('rec'); btn.textContent = '🎤 اكتب بصوتك'; }
+  };
+  _rec = rec;
+  _recTarget = targetId;
+  try { rec.start(); } catch (e) { _rec = null; toast('مقدرتش أشغل الميكروفون', 'err'); }
+};
+function stopMic() { if (_rec) { try { _rec.stop(); } catch (e) {} _rec = null; } }
+
+// ================== التوقيع والصور ==================
+/** لوحة توقيع بالإصبع */
+function signaturePad(id) {
+  return `<canvas id="${id}" class="sig-pad" width="600" height="220"></canvas>
+    <div class="flex mt"><button type="button" class="btn sm outline" onclick="A.sigClear('${id}')">🗑️ مسح</button></div>`;
+}
+function initSignature(id) {
+  const cv = document.getElementById(id);
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.strokeStyle = '#111';
+  let drawing = false, empty = true;
+  const pos = e => {
+    const r = cv.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return { x: (t.clientX - r.left) * (cv.width / r.width), y: (t.clientY - r.top) * (cv.height / r.height) };
+  };
+  const start = e => { e.preventDefault(); drawing = true; empty = false; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+  const move = e => { if (!drawing) return; e.preventDefault(); const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
+  const end = () => { drawing = false; };
+  cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  cv.addEventListener('touchstart', start, { passive: false });
+  cv.addEventListener('touchmove', move, { passive: false });
+  cv.addEventListener('touchend', end);
+  cv._isEmpty = () => empty;
+}
+A.sigClear = (id) => {
+  const cv = document.getElementById(id);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  cv._isEmpty = () => true;
+  initSignature(id);
+};
+
+/** بيصغّر الصورة قبل الرفع عشان تبقى خفيفة على النت */
+function shrinkImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, (maxSide || 1200) / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(cv.toDataURL('image/jpeg', quality || 0.7));
+      };
+      img.onerror = () => reject(new Error('مقدرتش أقرا الصورة'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('مقدرتش أقرا الملف'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadAttachment(kind, id, type, dataUrl) {
+  if (!navigator.onLine) throw { msg: 'المرفقات محتاجة نت — سجل الحركة والصور ارفعها بعدين' };
+  const r = await api('uploadAttachment', { kind: kind, id: id, type: type, data: dataUrl });
+  return r.url;
+}
+
+// ================== الطلبات وسندات القبض ==================
+function products() { return JSON.parse(localStorage.getItem('crm_products') || '[]'); }
+async function syncProducts() {
+  const v = S.data && S.data.productsVersion;
+  if (v === undefined) return;
+  if (!v) { localStorage.removeItem('crm_products'); localStorage.removeItem('crm_products_v'); return; }
+  if (localStorage.getItem('crm_products_v') === v && products().length) return;
+  try {
+    const r = await api('getProducts', {});
+    localStorage.setItem('crm_products', JSON.stringify(r.products || []));
+    localStorage.setItem('crm_products_v', r.version || v);
+  } catch (e) { /* هنجيبه المرة الجاية */ }
+}
+function vatPct() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return Number(s.VAT_PERCENT) || 0;
+}
+function featureOn(key) {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return String(s[key] === undefined ? 'TRUE' : s[key]).toUpperCase() !== 'FALSE';
+}
+
+// ----- شاشة الطلب -----
+A.orderForm = (custId) => {
+  const c = custById(custId);
+  if (!c) return;
+  if (!products().length) return toast('الكتالوج فاضي — الأدمن لازم يسحب الأصناف من قيود الأول', 'err');
+  A._order = { customer_id: custId, items: [], notes: '' };
+  renderOrderModal(c);
+};
+
+/** حالة ائتمان العميل — نفس منطق السيرفر */
+function creditInfo(c, extra) {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  const limit = Number(c.credit_limit) > 0 ? Number(c.credit_limit) : (Number(s.CREDIT_LIMIT_DEFAULT) || 0);
+  const exposure = Math.round(((Number(c.balance) || 0) + (Number(extra) || 0)) * 100) / 100;
+  const overdue = Number(c.overdue) || 0;
+  const overLimit = limit > 0 && exposure > limit;
+  const blockLimit = String(s.CREDIT_BLOCK).toUpperCase() === 'TRUE';
+  const blockOverdue = String(s.CREDIT_BLOCK_OVERDUE).toUpperCase() === 'TRUE';
+  return {
+    limit: limit, exposure: exposure, overdue: overdue, overLimit: overLimit,
+    available: limit > 0 ? Math.round((limit - exposure) * 100) / 100 : null,
+    blocked: (overLimit && blockLimit) || (overdue > 0 && blockOverdue)
+  };
+}
+
+function renderOrderModal(c) {
+  const o = A._order;
+  const sub = o.items.reduce((s, i) => s + i.qty * i.price, 0);
+  const vat = Math.round(sub * vatPct()) / 100;
+  const cr = creditInfo(c, sub + vat);
+  openModal(`
+    <h2>🛒 طلب جديد: ${esc(c.name)}</h2>
+    <p class="modal-sub">الطلب بيتبعت لقيود كـ <b>عرض سعر</b> — الفاتورة بتتعمل من الإدارة.</p>
+    ${cr.overdue > 0 ? '<div class="card" style="border-right:4px solid var(--red)"><b>⚠️ العميل عليه متأخرات ' + moneyC(cr.overdue) + '</b><div class="muted">راجع الإدارة قبل ما تاخد طلب جديد.</div></div>' : ''}
+    ${cr.limit > 0 ? `<div class="card" style="border-right:4px solid ${cr.overLimit ? 'var(--red)' : 'var(--green)'}">
+      <div class="stat-line"><span>حد الائتمان</span><b>${moneyC(cr.limit)}</b></div>
+      <div class="stat-line"><span>رصيده + الطلب ده</span><b>${moneyC(cr.exposure)}</b></div>
+      <div class="stat-line"><span>${cr.overLimit ? '<b style="color:var(--red)">تعدى الحد بـ</b>' : 'المتاح ليه'}</span>
+        <b class="${cr.overLimit ? 'neg' : 'pos'}">${moneyC(Math.abs(cr.available))}</b></div>
+      ${cr.blocked ? '<div class="muted" style="color:var(--red)"><b>الطلب مش هيتقبل — لازم موافقة الإدارة</b></div>' : ''}
+    </div>` : ''}
+    <input id="ord-search" placeholder="🔍 دور على صنف بالاسم أو الكود" oninput="A.orderSearch(this.value)" autocomplete="off">
+    <div id="ord-results"></div>
+    <div class="section-title"><span>أصناف الطلب (${o.items.length})</span></div>
+    <div id="ord-items">${orderItemsHtml()}</div>
+    <div class="card">
+      <div class="stat-line"><span>الإجمالي قبل الضريبة</span><b>${moneyC(sub)}</b></div>
+      <div class="stat-line"><span>ضريبة ${vatPct()}%</span><b>${moneyC(vat)}</b></div>
+      <div class="stat-line"><span><b>الإجمالي التقديري</b></span><b>${moneyC(sub + vat)}</b></div>
+    </div>
+    <label>ملاحظات على الطلب</label>
+    <textarea id="ord-notes" rows="2" placeholder="موعد التسليم، طلبات خاصة...">${esc(o.notes || '')}</textarea>
+    ${micButton('ord-notes')}
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.orderSave('${c.id}')" ${(o.items.length && !cr.blocked) ? '' : 'disabled'}>حفظ الطلب ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+}
+
+function orderItemsHtml() {
+  const o = A._order;
+  if (!o.items.length) return '<div class="empty" style="padding:16px"><div class="big">🛒</div>دور على صنف وضيفه</div>';
+  return o.items.map((it, idx) => `
+    <div class="cust-card" style="padding:10px 12px">
+      <div class="cust-head">
+        <div><div class="cust-name" style="font-size:14px">${esc(it.name)}</div>
+          <div class="cust-meta">${esc(it.sku || '')} • ${moneyC(it.price)} للوحدة
+          ${it.price < it.list_price ? '<span class="badge warm">خصم ' + Math.round((1 - it.price / it.list_price) * 100) + '%</span>' : ''}</div></div>
+        <b>${moneyC(it.qty * it.price)}</b>
+      </div>
+      <div class="flex mt" style="gap:6px">
+        <button class="btn sm outline" onclick="A.ordQty(${idx},-1)">−</button>
+        <input type="text" inputmode="decimal" value="${it.qty}" onchange="A.ordSetQty(${idx}, this.value)" style="text-align:center">
+        <button class="btn sm outline" onclick="A.ordQty(${idx},1)">+</button>
+        <input type="text" inputmode="decimal" value="${it.price}" onchange="A.ordSetPrice(${idx}, this.value)" title="السعر">
+        <button class="btn sm red" onclick="A.ordRemove(${idx})">حذف</button>
+      </div>
+    </div>`).join('');
+}
+
+A.orderSearch = (q) => {
+  const box = document.getElementById('ord-results');
+  q = normDigits(q).toLowerCase().trim();
+  if (!q) { box.innerHTML = ''; return; }
+  const list = products().filter(p =>
+    String(p.name).toLowerCase().includes(q) || String(p.sku).toLowerCase().includes(q)).slice(0, 8);
+  box.innerHTML = list.length ? list.map(p => `
+    <div class="cust-card" style="padding:9px 12px;cursor:pointer" onclick="A.ordAdd('${esc(String(p.id))}')">
+      <div class="cust-head"><div><div class="cust-name" style="font-size:14px">${esc(p.name)}</div>
+      <div class="cust-meta">${esc(p.sku || '')} ${p.unit ? '• ' + esc(p.unit) : ''}</div></div>
+      <b>${moneyC(p.price)}</b></div>
+    </div>`).join('') : '<div class="muted" style="padding:8px">مفيش صنف بالاسم ده</div>';
+};
+
+A.ordAdd = (pid) => {
+  const p = products().find(x => String(x.id) === String(pid));
+  if (!p) return;
+  const o = A._order;
+  const found = o.items.find(i => String(i.product_qoyod_id) === String(p.id));
+  if (found) found.qty += 1;
+  else o.items.push({ product_qoyod_id: p.id, sku: p.sku, name: p.name, qty: 1, price: p.price, list_price: p.price });
+  refreshOrderModal();
+};
+A.ordQty = (idx, d) => {
+  const it = A._order.items[idx];
+  it.qty = Math.max(0, Math.round((it.qty + d) * 100) / 100);
+  if (!it.qty) A._order.items.splice(idx, 1);
+  refreshOrderModal();
+};
+A.ordSetQty = (idx, v) => {
+  const n = Number(normDigits(v));
+  if (!(n > 0)) { A._order.items.splice(idx, 1); } else A._order.items[idx].qty = n;
+  refreshOrderModal();
+};
+A.ordSetPrice = (idx, v) => {
+  const n = Number(normDigits(v));
+  if (n >= 0) A._order.items[idx].price = n;
+  refreshOrderModal();
+};
+A.ordRemove = (idx) => { A._order.items.splice(idx, 1); refreshOrderModal(); };
+
+function refreshOrderModal() {
+  const notes = document.getElementById('ord-notes');
+  if (notes) A._order.notes = notes.value;
+  const c = custById(A._order.customer_id);
+  const q = (document.getElementById('ord-search') || {}).value || '';
+  renderOrderModal(c);
+  const s = document.getElementById('ord-search');
+  if (s && q) { s.value = q; A.orderSearch(q); }
+}
+
+A.orderSave = async (custId) => {
+  const o = A._order;
+  const notes = document.getElementById('ord-notes');
+  if (notes) o.notes = notes.value.trim();
+  if (!o.items.length) return toast('ضيف أصناف الأول', 'err');
+  const payload = { customer_id: custId, items: o.items, notes: o.notes, date: new Date().toISOString().slice(0, 10) };
+  closeModal();
+  try { const r = await api('saveOrder', payload); toast(r.message, 'ok'); }
+  catch (e) {
+    if (e.offline) { qpush('saveOrder', payload); toast('📴 الطلب اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
+    else toast(e.msg || 'خطأ', 'err');
+  }
+};
+
+// ----- سند القبض -----
+A.collectForm = (custId) => {
+  const c = custById(custId);
+  if (!c) return;
+  openModal(`
+    <h2>💵 سند قبض: ${esc(c.name)}</h2>
+    ${Number(c.overdue) > 0 ? '<p class="modal-sub">المتأخر عليه: <b>' + moneyC(c.overdue) + '</b></p>' : ''}
+    <label>المبلغ (${esc(cur())}) *</label>
+    <input id="col-amount" type="text" inputmode="decimal" placeholder="0">
+    <label>طريقة الدفع</label>
+    <select id="col-method" onchange="A.colMethod(this.value)">
+      <option>كاش</option><option>شيك</option><option>تحويل</option>
+    </select>
+    <div id="col-ref-box" style="display:none">
+      <label>رقم الشيك / المرجع</label><input id="col-ref">
+    </div>
+    <label>ملاحظات</label><input id="col-notes">
+    <label>توقيع العميل (اختياري)</label>
+    ${signaturePad('col-sig')}
+    <p class="muted mt">التحصيل الكاش بيتسجل في عهدتك لحد ما تورّده للإدارة.</p>
+    <div class="modal-actions">
+      <button class="btn green" onclick="A.collectSave('${custId}')">حفظ السند ✔</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`, () => { initSignature('col-sig'); });
+};
+A.colMethod = (v) => {
+  document.getElementById('col-ref-box').style.display = (v === 'كاش') ? 'none' : 'block';
+};
+A.collectSave = async (custId) => {
+  const amount = normDigits($('#col-amount').value);
+  if (!(Number(amount) > 0)) return toast('اكتب المبلغ', 'err');
+  const payload = {
+    customer_id: custId, amount: amount, method: $('#col-method').value,
+    reference: ($('#col-ref') || {}).value || '', notes: $('#col-notes').value.trim(),
+    date: new Date().toISOString().slice(0, 10)
+  };
+  const cv = document.getElementById('col-sig');
+  const sig = (cv && !cv._isEmpty()) ? cv.toDataURL('image/png') : null;
+  closeModal();
+  try {
+    const r = await api('saveCollection', payload);
+    toast(r.message, 'ok');
+    if (sig && r.id) {
+      try { await uploadAttachment('collection', r.id, 'signature', sig); toast('✍️ التوقيع اتحفظ', 'ok'); }
+      catch (e) { toast('التوقيع مترفعش: ' + (e.msg || ''), 'err'); }
+    }
+    refresh(true);
+  } catch (e) {
+    if (e.offline) { qpush('saveCollection', payload); toast('📴 السند اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
+    else toast(e.msg || 'خطأ', 'err');
+  }
+};
+
+// ----- عهدة المندوب -----
+A.myCash = async () => {
+  toast('⏳ بجيب كشف عهدتك...');
+  try {
+    const r = await api('myCash', {});
+    A._cash = r;
+    renderCashModal();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+function renderCashModal() {
+  const r = A._cash, c = r.cash;
+  openModal(`
+    <h2>💰 كشف عهدتك</h2>
+    <div class="card" style="text-align:center">
+      <div style="font-size:30px;font-weight:800;color:${c.balance > 0 ? 'var(--green)' : 'var(--muted)'}">
+        ${money(c.balance)} ${esc(r.currency)}</div>
+      <div class="muted">اللي معاك دلوقتي</div>
+    </div>
+    <div class="card">
+      <div class="stat-line"><span>رصيد بداية المدة${c.openingDate ? ' (' + esc(c.openingDate) + ')' : ''}</span><b>${money(c.opening)}</b></div>
+      <div class="stat-line"><span>+ تحصيلات كاش (${c.collectionsCount})</span><b class="pos">${money(c.collections)}</b></div>
+      <div class="stat-line"><span>− مصروفات (${c.expensesCount})</span><b class="neg">${money(c.expenses)}</b></div>
+      <div class="stat-line"><span><b>= اللي معاك</b></span><b>${money(c.balance)} ${esc(r.currency)}</b></div>
+    </div>
+    ${r.canSpend ? `<button class="btn amber full" onclick="A.expenseForm()">➖ صرف من العهدة</button><div class="mt"></div>` : ''}
+    ${c.moves.length ? `<div class="section-title"><span>حركة العهدة</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>البيان</th><th>وارد</th><th>منصرف</th></tr>
+        ${c.moves.map(m => `<tr>
+          <td>${esc(m.date)}</td><td>${esc(m.label)}</td>
+          <td class="pos">${m.sign > 0 ? money(m.amount) : '—'}</td>
+          <td class="neg">${m.sign < 0 ? money(m.amount) : '—'}</td>
+        </tr>`).join('')}
+      </table></div>` : '<div class="empty">مفيش حركة على عهدتك 👍</div>'}
+    <p class="muted mt">لما تورّد الفلوس للإدارة، الأدمن بيقفل الحركات دي والباقي بيتحول لرصيد بداية جديد.</p>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+}
+
+A.expenseForm = () => {
+  const r = A._cash;
+  openModal(`
+    <h2>➖ صرف من العهدة</h2>
+    <p class="modal-sub">اللي معاك دلوقتي: <b>${money(r.cash.balance)} ${esc(r.currency)}</b></p>
+    <label>نوع المصروف *</label>
+    <select id="exp-cat">${r.categories.map(c => '<option>' + esc(c) + '</option>').join('')}</select>
+    <label>المبلغ (${esc(r.currency)}) *</label>
+    <input id="exp-amount" type="text" inputmode="decimal" placeholder="0">
+    <label>البيان *</label>
+    <input id="exp-desc" placeholder="مثال: بنزين السيارة من محطة كذا">
+    <p class="muted mt">المصروف بينزل من عهدتك على طول، والإدارة بتشوفه في كشفك.</p>
+    <div class="modal-actions">
+      <button class="btn amber" onclick="A.expenseSave()">تسجيل المصروف ✔</button>
+      <button class="btn outline" onclick="A.myCash()">رجوع</button>
+    </div>`);
+};
+
+A.expenseSave = async () => {
+  const payload = {
+    category: $('#exp-cat').value,
+    amount: normDigits($('#exp-amount').value),
+    description: $('#exp-desc').value.trim(),
+    date: new Date().toISOString().slice(0, 10)
+  };
+  if (!(Number(payload.amount) > 0)) return toast('اكتب المبلغ', 'err');
+  if (!payload.description) return toast('اكتب بيان المصروف', 'err');
+  if (Number(payload.amount) > A._cash.cash.balance) return toast('المبلغ أكبر من العهدة اللي معاك', 'err');
+  closeModal();
+  try { const r = await api('saveExpense', payload); toast(r.message, 'ok'); A.myCash(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 // ================== تتبع خط السير ==================
