@@ -2394,9 +2394,17 @@ function adSettings() {
         <div><label>مسار عروض الأسعار</label><input id="s-quote-path" value="${esc(s.QOYOD_QUOTE_PATH || '/estimates')}" style="direction:ltr"></div>
         <div><label>مسار سندات القبض</label><input id="s-receipt-path" value="${esc(s.QOYOD_RECEIPT_PATH || '/receipts')}" style="direction:ltr"></div>
       </div>
-      <div class="grid2">
-        <div><label>مسار الأصناف</label><input id="s-products-path" value="${esc(s.QOYOD_PRODUCTS_PATH || '/products')}" style="direction:ltr"></div>
-        <div><label>كود حساب الصندوق في قيود</label><input id="s-cash-account" value="${esc(s.QOYOD_CASH_ACCOUNT_ID || '')}" style="direction:ltr"></div>
+      <div><label>مسار الأصناف</label><input id="s-products-path" value="${esc(s.QOYOD_PRODUCTS_PATH || '/products')}" style="direction:ltr"></div>
+      <div class="card" style="background:var(--blue-soft)">
+        <b>الربط الإجباري في قيود</b>
+        <p class="muted">قيود بيطلب المخزن في عرض السعر، وحساب الصندوق في سند القبض.</p>
+        <button class="btn sm" onclick="A.qoyodLists()">🔄 جيب المخازن والحسابات من قيود</button>
+        <div class="grid2 mt">
+          <div><label>المخزن</label>
+            <select id="s-inventory"><option value="${esc(s.QOYOD_INVENTORY_ID || '')}">${esc(s.QOYOD_INVENTORY_ID || '— اضغط الزرار فوق —')}</option></select></div>
+          <div><label>حساب الصندوق</label>
+            <select id="s-cash-account"><option value="${esc(s.QOYOD_CASH_ACCOUNT_ID || '')}">${esc(s.QOYOD_CASH_ACCOUNT_ID || '— اضغط الزرار فوق —')}</option></select></div>
+        </div>
       </div>
       <div><label>صلاحية عرض السعر (يوم)</label><input id="s-quote-days" type="number" min="1" value="${esc(s.QUOTE_VALID_DAYS || 15)}"></div>
       <div><label>نسبة الضريبة %</label><input id="s-vat" type="number" value="${esc(s.VAT_PERCENT || 15)}"></div>
@@ -2522,6 +2530,7 @@ A.saveSettings = async () => {
     QOYOD_RECEIPT_PATH: $('#s-receipt-path').value.trim(),
     QOYOD_PRODUCTS_PATH: $('#s-products-path').value.trim(),
     QOYOD_CASH_ACCOUNT_ID: $('#s-cash-account').value.trim(),
+    QOYOD_INVENTORY_ID: $('#s-inventory').value.trim(),
     QUOTE_VALID_DAYS: $('#s-quote-days').value,
     VAT_PERCENT: $('#s-vat').value,
     CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
@@ -2623,6 +2632,26 @@ A.qoyodProbe = async () => {
         انسخ سطر "الحقول" وابعتهولي وأنا أظبط الإرسال عليه.</p></div>
       <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
   } catch (e) { toast(e.msg || 'خطأ في الفحص', 'err'); }
+};
+
+A.qoyodLists = async () => {
+  toast('⏳ بجيب المخازن والحسابات...');
+  try {
+    const r = await api('qoyodLists', {});
+    const fill = (id, list, current) => {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— اختار —</option>' + list.map(x =>
+        `<option value="${esc(String(x.id))}" ${String(x.id) === String(current) ? 'selected' : ''}>${esc(x.name)} (${esc(String(x.id))})</option>`).join('');
+    };
+    const s = S.data.allSettings || {};
+    fill('s-inventory', r.inventories, s.QOYOD_INVENTORY_ID);
+    fill('s-cash-account', r.accounts, s.QOYOD_CASH_ACCOUNT_ID);
+    const msg = [];
+    if (r.inventoriesError) msg.push('المخازن: ' + r.inventoriesError);
+    if (r.accountsError) msg.push('الحسابات: ' + r.accountsError);
+    toast(msg.length ? msg.join(' | ') : '✅ اختار المخزن وحساب الصندوق واضغط حفظ', msg.length ? 'err' : 'ok');
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 A.syncProductsNow = async () => {
