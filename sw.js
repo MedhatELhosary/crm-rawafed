@@ -1,5 +1,5 @@
 // Service Worker — بيخلي التطبيق يفتح بدون نت، وبياخد التحديثات فورًا لما يكون فيه نت
-const CACHE = 'crm-rawafed-v28';
+const CACHE = 'crm-rawafed-v29';
 
 // ملفات التطبيق نفسه — دي بتتحدث كل شوية
 const SHELL = [

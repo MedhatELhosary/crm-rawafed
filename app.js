@@ -870,7 +870,10 @@ function viewMine() {
               <div class="cust-meta">${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
                 ${c.reference ? '• ' + esc(c.reference) : ''}</div></div>
             <div style="text-align:left"><b class="pos">${money(c.amount)}</b>
-              <div>${c.status === 'مرسل' ? '<span class="badge cool">في قيود</span>' : '<span class="badge warm">مستني</span>'}</div></div>
+              <div>${c.status === 'مرسل' ? '<span class="badge cool">اتسجل</span>'
+                : c.status === 'بانتظار البنك' ? '<span class="badge warm">🏦 مستني البنك</span>'
+                : c.status === 'مطابق' ? '<span class="badge info">🏦 وصل البنك</span>'
+                : '<span class="badge warm">مستني</span>'}</div></div>
           </div></div>`).join('') : '<div class="empty"><div class="big">💵</div>لسه مسجلتش تحصيلات</div>')
       : (orders.length ? orders.map(o => `<div class="cust-card" style="padding:11px 13px">
           <div class="cust-head">
@@ -1464,8 +1467,9 @@ function adSales() {
       <button class="pill ${sub === 'orders' ? 'active' : ''}" onclick="A.salesTab('orders')">🛒 الطلبات</button>
       <button class="pill ${sub === 'collections' ? 'active' : ''}" onclick="A.salesTab('collections')">💵 التحصيلات</button>
       <button class="pill ${sub === 'cash' ? 'active' : ''}" onclick="A.salesTab('cash')">💰 عهد المناديب</button>
+      <button class="pill ${sub === 'bank' ? 'active' : ''}" onclick="A.salesTab('bank')">🏦 مطابقة البنك</button>
     </div>
-    ${sub === 'orders' ? `
+    ${sub === 'bank' ? adBank() : sub === 'orders' ? `
       <div class="table-wrap"><table>
         <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
         ${orders.map(o => `<tr>
@@ -1497,7 +1501,10 @@ function adSales() {
           <td><b style="color:var(--green)">${money(c.amount)}</b></td>
           <td>${esc(c.method)}</td>
           <td>${esc(c.reference || '—')}${c.signature ? ' ' + attachLinks({ signature: c.signature }) : ''}</td>
-          <td>${statusBadge(c.status, c.error)}</td>
+          <td>${c.status === 'بانتظار البنك' ? '<span class="badge warm">🏦 مستني البنك</span>'
+              : c.status === 'مطابق' ? '<span class="badge info">🏦 اتطابق</span>'
+              : statusBadge(c.status, c.error)}
+            ${c.bank_name ? '<div class="muted" style="font-size:11px">' + esc(c.bank_name) + '</div>' : ''}</td>
           <td>${c.settlement_id ? '<span class="badge cool">اتورد</span>' : (c.method === 'كاش' ? '<span class="badge warm">في العهدة</span>' : '—')}</td>
           <td>${c.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushCollection('${c.id}')">📤 ابعت</button>` : ''}</td>
         </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش تحصيلات لسه</td></tr>'}
@@ -1543,6 +1550,147 @@ function adSales() {
         </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش توريدات</td></tr>'}
       </table></div>`}`;
 }
+
+// ----- مطابقة الحوالات البنكية -----
+function adBank() {
+  const b = S.bank;
+  if (!b) { A.loadBank(); return '<div class="empty"><div class="big">⏳</div>بيحمل بيانات البنك...</div>'; }
+  const banks = b.banks || [];
+  const cur = b.currency;
+  return `
+    ${!banks.length ? `<div class="card" style="border-right:4px solid var(--amber)">
+      <b>⚠️ لسه محددتش بنوكك</b>
+      <p class="muted">روح <b>الإعدادات ← البنوك</b> وضيف بنوكك وحساب كل واحد في قيود، وبعدين ارجع هنا.</p>
+    </div>` : `
+    <div class="card">
+      <h3>📥 ارفع كشف حساب البنك</h3>
+      <p class="muted">النظام هيطابق التاريخ والمبلغ مع الحوالات اللي المناديب سجلوها.
+      المتطابق بس هو اللي هيترفع لقيود على حساب البنك ده.</p>
+      <label>البنك</label>
+      <select id="bk-bank">${banks.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>
+      <div class="flex mt">
+        <button class="btn ghost sm" onclick="A.bankTemplate()">📄 نزّل التمبلت</button>
+        <input type="file" id="bk-file" accept=".csv,text/csv" style="display:none" onchange="A.bankPreview(this)">
+        <button class="btn sm" onclick="document.getElementById('bk-file').click()">⬆️ ارفع الكشف</button>
+      </div>
+      <p class="muted mt">التمبلت أعمدته: <b>التاريخ · المبلغ · رقم العملية · البيان</b> — احفظه CSV UTF-8.</p>
+      <div id="bk-result"></div>
+    </div>`}
+
+    <div class="section-title"><span>⏳ حوالات مستنية تأكيد البنك (${(b.pending || []).length})</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>تاريخ التسجيل</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>المرجع</th><th>الحالة</th></tr>
+      ${(b.pending || []).map(p => `<tr>
+        <td>${esc(p.date)}</td><td><b>${esc(p.customer)}</b></td><td>${esc(p.rep)}</td>
+        <td><b>${money(p.amount)}</b></td><td>${esc(p.ref || '—')}</td>
+        <td><span class="badge warm">لسه مظهرتش في البنك</span></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش حوالات معلقة 👍</td></tr>'}
+    </table></div>
+
+    <div class="section-title"><span>❓ حوالات في البنك ومحدش سجّلها (${(b.rows || []).length})</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>التاريخ</th><th>البنك</th><th>المبلغ</th><th>رقم العملية</th><th>البيان</th><th></th></tr>
+      ${(b.rows || []).map(r => `<tr>
+        <td>${esc(r.date)}</td><td>${esc(r.bank_name)}</td>
+        <td><b class="pos">${money(r.amount)}</b></td>
+        <td>${esc(r.ref || '—')}</td>
+        <td class="muted">${esc(r.description || '')}</td>
+        <td style="white-space:nowrap">
+          ${r.notified ? '<span class="badge info">اتبعت</span>'
+            : `<button class="btn sm amber" onclick="A.notifyBank('${r.id}')">📣 اسأل المناديب</button>`}
+          <button class="btn sm outline" onclick="A.closeBank('${r.id}')">إقفال</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش سطور بنك معلقة 👍</td></tr>'}
+    </table></div>
+    <p class="muted">"اسأل المناديب" بتبعت لكلهم إشعار في التطبيق وعلى تليجرام بمبلغ الحوالة وتاريخها.</p>`;
+}
+
+A.loadBank = async () => {
+  if (A._bankLoading) return;
+  A._bankLoading = true;
+  try { S.bank = await api('bankUnmatched', {}); render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  finally { A._bankLoading = false; }
+};
+
+A.bankTemplate = () => {
+  downloadCsv('تمبلت_كشف_البنك', [{ 'التاريخ': '2026-08-15', 'المبلغ': '5000', 'رقم العملية': '', 'البيان': '' }]);
+  toast('املا الصفوف من كشف البنك واحفظه CSV UTF-8', 'ok');
+};
+
+A.bankPreview = async (input) => {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  input.value = '';
+  const bankId = $('#bk-bank').value;
+  const box = document.getElementById('bk-result');
+  box.innerHTML = '<div class="card">⏳ بيقرا الكشف...</div>';
+  const grid = parseCsv(await file.text());
+  if (grid.length < 2) { box.innerHTML = '<div class="card" style="color:var(--red)">الملف فاضي</div>'; return; }
+  const headers = grid[0].map(h => String(h).trim());
+  const rows = grid.slice(1).map((r, i) => {
+    const o = { __row: i + 2 };
+    headers.forEach((h, j) => o[h] = r[j] === undefined ? '' : r[j]);
+    return o;
+  });
+  A._bankRows = rows; A._bankId = bankId;
+  try {
+    const r = await api('bankMatch', { bank_id: bankId, rows: rows, dryRun: true });
+    box.innerHTML = bankSummaryHtml(r.summary, true);
+  } catch (e) {
+    box.innerHTML = '<div class="card" style="color:var(--red)">' + esc(e.msg || 'خطأ') + '</div>';
+  }
+};
+
+function bankSummaryHtml(s, isPreview) {
+  return `
+    <div class="card" style="border-right:4px solid ${s.matched ? 'var(--green)' : 'var(--amber)'}">
+      <b>${isPreview ? 'نتيجة الفحص (لسه محفظتش حاجة)' : '✅ تم التنفيذ'} — ${esc(s.bank)}</b>
+      <div class="stat-line"><span>سطور اتقرت من الكشف</span><b>${s.read}</b></div>
+      <div class="stat-line"><span>حوالات هتتطابق وترفع لقيود</span><b class="pos">${s.matched} (${money(s.matchedAmount)} ${esc(s.currency)})</b></div>
+      <div class="stat-line"><span>سطور بنك من غير صاحب</span><b class="${s.unmatchedBank ? 'neg' : ''}">${s.unmatchedBank} (${money(s.unmatchedBankAmount)})</b></div>
+      <div class="stat-line"><span>حوالات مناديب لسه مظهرتش</span><b>${s.stillPending}</b></div>
+      ${s.errorCount ? '<div class="stat-line"><span>سطور فيها مشاكل</span><b class="neg">' + s.errorCount + '</b></div>' : ''}
+      ${s.sent !== undefined ? '<div class="stat-line"><span>اتبعت لقيود</span><b class="pos">' + s.sent + '</b></div>' : ''}
+    </div>
+    ${s.preview && s.preview.length ? `<div class="table-wrap"><table>
+      <tr><th>تاريخ البنك</th><th>المبلغ</th><th>العميل</th><th>المندوب</th><th>تاريخ التسجيل</th></tr>
+      ${s.preview.map(p => `<tr><td>${esc(p.date)}</td><td><b>${money(p.amount)}</b></td>
+        <td>${esc(p.customer)}</td><td>${esc(p.rep)}</td><td>${esc(p.repDate)}</td></tr>`).join('')}
+    </table></div>` : ''}
+    ${s.errors && s.errors.length ? `<div class="card"><b>⚠️ سطور اتساب:</b>
+      ${s.errors.map(e => '<div class="muted">صف ' + e.row + ': ' + esc(e.reason) + '</div>').join('')}</div>` : ''}
+    ${s.pushErrors && s.pushErrors.length ? `<div class="card" style="color:var(--red)"><b>فشل إرسال:</b>
+      ${s.pushErrors.map(e => '<div>' + esc(e) + '</div>').join('')}</div>` : ''}
+    ${isPreview && s.matched ? `<button class="btn green full" onclick="A.bankApply()">✔ نفّذ المطابقة وابعت لقيود</button>` : ''}
+    ${isPreview && !s.matched ? '<div class="card muted">مفيش حوالات متطابقة — السطور هتتسجل كـ"من غير صاحب" لو نفّذت.</div>' +
+      '<button class="btn amber full" onclick="A.bankApply()">تسجيل سطور البنك من غير مطابقة</button>' : ''}`;
+}
+
+A.bankApply = async () => {
+  const box = document.getElementById('bk-result');
+  box.innerHTML = '<div class="card">⏳ بينفّذ ويبعت لقيود...</div>';
+  try {
+    const r = await api('bankMatch', { bank_id: A._bankId, rows: A._bankRows, dryRun: false });
+    box.innerHTML = bankSummaryHtml(r.summary, false);
+    toast(r.message, 'ok');
+    S.bank = null; S.sales = null; A.loadBank();
+  } catch (e) {
+    box.innerHTML = '<div class="card" style="color:var(--red)">' + esc(e.msg || 'خطأ') + '</div>';
+  }
+};
+
+A.notifyBank = async (id) => {
+  if (!confirm('هيتبعت إخطار لكل المناديب بمبلغ الحوالة وتاريخها. نكمل؟')) return;
+  try { const r = await api('notifyBankRow', { id: id }); toast(r.message, 'ok'); S.bank = null; A.loadBank(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.closeBank = async (id) => {
+  const note = prompt('سبب الإقفال (مثال: تحويل من مورد مش عميل):', '');
+  if (note === null) return;
+  try { const r = await api('closeBankRow', { id: id, note: note }); toast(r.message, 'ok'); S.bank = null; A.loadBank(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
 
 /** روابط الصور والتوقيع في جداول الأدمن */
 function attachLinks(row) {
@@ -2441,6 +2589,20 @@ function adSettings() {
         <p class="muted mt">✅ علّم على الطرق اللي بتدخل <b>عهدة المندوب</b> (الكاش عادةً). ومدى الأفضل يروح لحساب وسيط
         "مدى تحت التحصيل" وتسوّي منه للبنك آخر الشهر — عشان مطابقة البنك تبقى سهلة.</p>
       </div>
+      <div class="card" style="background:var(--amber-soft)">
+        <b>🏦 البنوك والحوالات</b>
+        <p class="muted">الطرق دي مبترفعش لقيود غير بعد ما تطابقها بكشف البنك.</p>
+        <label>طرق تحتاج تأكيد البنك</label>
+        <input id="s-bank-methods" value="${esc(s.BANK_METHODS || 'تحويل')}">
+        <div class="grid2">
+          <div><label>فرق الأيام المسموح</label><input id="s-bank-days" type="number" min="0" value="${esc(s.BANK_MATCH_DAYS || 3)}"></div>
+          <div><label>فرق المبلغ المسموح</label><input id="s-bank-tol" type="number" min="0" value="${esc(s.BANK_MATCH_TOLERANCE || 0)}"></div>
+        </div>
+        <div class="section-title" style="margin-bottom:4px"><span>بنوكك</span>
+          <button class="btn sm ghost" onclick="A.addBank()">➕ ضيف بنك</button></div>
+        <div id="banks-box">${banksHtml(s)}</div>
+        <button class="btn green mt" onclick="A.saveBanks()">حفظ البنوك ✔</button>
+      </div>
       <div><label>صلاحية عرض السعر (يوم)</label><input id="s-quote-days" type="number" min="1" value="${esc(s.QUOTE_VALID_DAYS || 15)}"></div>
       <div><label>نسبة الضريبة %</label><input id="s-vat" type="number" value="${esc(s.VAT_PERCENT || 15)}"></div>
       <div class="grid2">
@@ -2583,6 +2745,9 @@ A.saveSettings = async () => {
       .filter(el => el.checked).map(el => el.dataset.method).join(','),
     QUOTE_VALID_DAYS: $('#s-quote-days').value,
     VAT_PERCENT: $('#s-vat').value,
+    BANK_METHODS: $('#s-bank-methods').value.trim(),
+    BANK_MATCH_DAYS: $('#s-bank-days').value,
+    BANK_MATCH_TOLERANCE: $('#s-bank-tol').value,
     CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
     CREDIT_BLOCK: $('#s-credit-block').checked ? 'TRUE' : 'FALSE',
     CREDIT_BLOCK_OVERDUE: $('#s-credit-overdue').checked ? 'TRUE' : 'FALSE',
@@ -2682,6 +2847,59 @@ A.qoyodProbe = async () => {
         انسخ سطر "الحقول" وابعتهولي وأنا أظبط الإرسال عليه.</p></div>
       <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
   } catch (e) { toast(e.msg || 'خطأ في الفحص', 'err'); }
+};
+
+/** صفوف البنوك: اسم + حساب قيود */
+function banksHtml(s) {
+  let banks = [];
+  try { banks = JSON.parse(s.BANKS || '[]'); } catch (e) { banks = []; }
+  if (!banks.length) banks = [{ id: 'b1', name: '', account: '' }];
+  A._banks = banks;
+  A._accounts = A._accounts || [];
+  return banks.map((b, i) => `
+    <div class="method-row">
+      <input class="bank-name" data-i="${i}" value="${esc(b.name)}" placeholder="اسم البنك" style="flex:1">
+      <select class="bank-acc" data-i="${i}" style="flex:1">
+        ${A._accounts.length
+          ? '<option value="">— حساب قيود —</option>' + A._accounts.map(a =>
+              `<option value="${esc(String(a.id))}" ${String(a.id) === String(b.account) ? 'selected' : ''}>${esc(a.name)}</option>`).join('')
+          : `<option value="${esc(String(b.account || ''))}">${esc(b.account ? 'كود ' + b.account : '— اضغط جيب الحسابات —')}</option>`}
+      </select>
+      <button class="btn sm red" onclick="A.delBank(${i})">✕</button>
+    </div>`).join('');
+}
+A.addBank = () => {
+  A._banks = collectBanks();
+  A._banks.push({ id: 'b' + (A._banks.length + 1), name: '', account: '' });
+  document.getElementById('banks-box').innerHTML =
+    banksHtml({ BANKS: JSON.stringify(A._banks) });
+};
+A.delBank = (i) => {
+  A._banks = collectBanks();
+  A._banks.splice(i, 1);
+  document.getElementById('banks-box').innerHTML =
+    banksHtml({ BANKS: JSON.stringify(A._banks.length ? A._banks : [{ id: 'b1', name: '', account: '' }]) });
+};
+function collectBanks() {
+  const names = Array.from(document.querySelectorAll('.bank-name'));
+  const accs = Array.from(document.querySelectorAll('.bank-acc'));
+  return names.map((el, i) => ({
+    id: (A._banks[i] && A._banks[i].id) || ('b' + (i + 1)),
+    name: el.value.trim(),
+    account: accs[i] ? accs[i].value : ''
+  }));
+}
+A.saveBanks = async () => {
+  const banks = collectBanks().filter(b => b.name);
+  if (!banks.length) return toast('ضيف بنك واحد على الأقل', 'err');
+  const missing = banks.find(b => !b.account);
+  if (missing) return toast('حدد حساب قيود لبنك "' + missing.name + '"', 'err');
+  try {
+    const r = await api('saveBanks', { banks: banks });
+    toast(r.message, 'ok');
+    S.bank = null;
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
 /** صف لكل طريقة دفع: الحساب في قيود + هل تدخل العهدة */
@@ -3358,13 +3576,27 @@ A.collectForm = (custId) => {
       <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
     </div>`, () => { initSignature('col-sig'); });
 };
+function bankMethodsList() {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  return String(s.BANK_METHODS || 'تحويل').split(',').map(x => x.trim()).filter(Boolean);
+}
+function isBankMethod(m) { return bankMethodsList().indexOf(String(m).trim()) > -1; }
+
 A.colMethod = (v) => {
   const custody = isCustodyMethod(v);
   document.getElementById('col-ref-box').style.display = custody ? 'none' : 'block';
   const lbl = document.getElementById('col-ref-label');
-  if (lbl) lbl.textContent = v === 'شيك' ? 'رقم الشيك' : v === 'مدى' ? 'رقم العملية / آخر 4 أرقام' : 'رقم المرجع';
+  if (lbl) lbl.textContent = v === 'شيك' ? 'رقم الشيك' : v === 'مدى' ? 'رقم العملية / آخر 4 أرقام' : 'رقم العملية';
   const hint = document.getElementById('col-hint');
-  if (hint) hint.textContent = custody ? '💰 هيدخل عهدتك لحد ما تورّده' : '🏦 بيروح لحساب ' + v + ' مباشرة — مش هيدخل عهدتك';
+  if (!hint) return;
+  if (isBankMethod(v)) {
+    hint.innerHTML = '<b style="color:var(--amber)">🏦 هتتسجل مستنية تأكيد وصولها البنك</b>' +
+      '<br>سجّل التاريخ والمبلغ زي ما هما في إشعار التحويل بالظبط عشان المطابقة تظبط.';
+  } else if (custody) {
+    hint.textContent = '💰 هيدخل عهدتك لحد ما تورّده';
+  } else {
+    hint.textContent = '🏦 بيروح لحساب ' + v + ' مباشرة — مش هيدخل عهدتك';
+  }
 };
 A.collectSave = async (custId) => {
   const amount = normDigits($('#col-amount').value);
