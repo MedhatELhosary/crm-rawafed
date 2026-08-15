@@ -1,5 +1,13 @@
-/* CRM روافد — التطبيق الرئيسي (مندوب + أدمن) */
 'use strict';
+/* =====================================================================
+   CRM روافد — ملف التطبيق المجمّع (متولّد تلقائيًا — متعدلش فيه)
+   عدّل في app/src/*.js وبعدين شغّل build.ps1
+   ===================================================================== */
+
+// ==================== [ core.js ] ====================
+/* CRM روافد — النواة: الحالة، الاتصال بالسيرفر، أدوات الواجهة، الدخول، والعرض الرئيسي */
+
+/* CRM روافد — التطبيق الرئيسي (مندوب + أدمن) */
 
 // ================== الحالة العامة ==================
 const S = {
@@ -338,6 +346,9 @@ function topbar(subtitle) {
   </div>`;
 }
 A.doRefresh = () => { qflush(); flushTrack(); ensureTracking(true); refresh(); };
+
+// ==================== [ rep.js ] ====================
+/* CRM روافد — واجهة المندوب: اليوم، المتابعات، العملاء، سجلي، حسابي */
 
 // ================== واجهة المندوب ==================
 function viewRep() {
@@ -1134,6 +1145,9 @@ function viewMe() {
     <p class="muted mt" style="text-align:center">CRM روافد — آخر تحديث بيانات: ${esc((S.data.serverTime || ''))}</p>`;
 }
 
+// ==================== [ admin.js ] ====================
+/* CRM روافد — لوحة الأدمن: اللوحة، التقرير اليومي، المبيعات، العملاء، الفريق، الإعدادات */
+
 // ================== واجهة الأدمن ==================
 function viewAdmin() {
   const tabs = [
@@ -1209,7 +1223,7 @@ function adDash() {
         <td><b>${esc(r.name)}</b></td><td>${esc(regionName(r.region_id))}</td>
         <td>${visitsToday.filter(v => String(v.rep_id) === String(r.id)).length}</td>
         <td>${visitsMonth.filter(v => String(v.rep_id) === String(r.id)).length}</td>
-        <td>${r.telegram_chat_id || '<span class="muted">غير متصل</span>'}</td>
+        <td>${r.telegram_chat_id ? esc(r.telegram_chat_id) : '<span class="muted">غير متصل</span>'}</td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">ضيف مناديب من صفحة المناديب والمناطق</td></tr>'}
     </table></div>
     <div class="section-title"><span>💰 أعمار الديون</span>
@@ -1540,15 +1554,27 @@ function attachLinks(row) {
   if (sig) h += `<button class="btn sm ghost" onclick="A.viewAttachments('${esc(JSON.stringify([sig]).replace(/'/g, ''))}')">✍️</button>`;
   return h;
 }
-A.viewAttachments = (json) => {
+/** المرفقات محفوظة خاصة على درايف — بنجيبها من السيرفر بعد التحقق من الصلاحية */
+A.viewAttachments = async (json) => {
   let urls = [];
   try { urls = JSON.parse(json); } catch (e) { return; }
   openModal(`
-    <h2>📎 المرفقات</h2>
-    <div class="attach-grid">${urls.map(u =>
-      `<a href="${esc(u)}" target="_blank"><img src="${esc(u)}" alt="مرفق"></a>`).join('')}</div>
-    <p class="muted mt">اضغط على الصورة لفتحها بالحجم الكامل على درايف.</p>
+    <h2>📎 المرفقات (${urls.length})</h2>
+    <div class="attach-grid" id="attach-box">${urls.map((u, i) =>
+      `<div class="attach-cell" id="att-${i}"><span class="muted">⏳ بيحمّل...</span></div>`).join('')}</div>
+    <p class="muted mt">الملفات محفوظة خاصة على درايف — مفيش رابط عام حد يقدر يفتحه.</p>
     <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  for (let i = 0; i < urls.length; i++) {
+    const cell = document.getElementById('att-' + i);
+    if (!cell) return;
+    try {
+      const r = await api('getAttachment', { url: urls[i] });
+      cell.innerHTML = `<a href="${esc(urls[i])}" target="_blank" rel="noopener">
+        <img src="${esc(r.data)}" alt="مرفق"></a>`;
+    } catch (e) {
+      cell.innerHTML = '<span class="muted">' + esc(e.msg || 'مقدرتش أعرضه') + '</span>';
+    }
+  }
 };
 
 function statusBadge(st, err) {
@@ -2516,6 +2542,12 @@ function adSettings() {
       </div>
       <p class="muted mt">البيانات القديمة بتتنقل لجداول أرشيف في نفس الملف (مش بتتمسح) عشان النظام يفضل سريع. بتشتغل تلقائي أول كل شهر.</p>
     </div>
+    <div class="card" style="border-right:4px solid var(--red)">
+      <h3>🧹 تنضيف بيانات التجربة</h3>
+      <p class="muted">قبل التشغيل الميداني: بيمسح الزيارات والطلبات والتحصيلات والتتبع،
+      وبيسيب المستخدمين والمناطق والعملاء والأصناف والإعدادات زي ما هي. بياخد نسخة احتياطية إجباري الأول.</p>
+      <button class="btn red mt" onclick="A.resetForm()">🧹 تنضيف بيانات التجربة</button>
+    </div>
     <div class="card">
       <h3>📋 سجل النظام</h3>
       ${(S.data.log || []).slice().reverse().slice(0, 10).map(l =>
@@ -2710,6 +2742,50 @@ A.syncProductsNow = async () => {
   } catch (e) { toast(e.msg || 'فشل السحب', 'err'); }
 };
 
+// ----- تنضيف بيانات التجربة -----
+A.resetForm = async () => {
+  toast('⏳ بحسب اللي هيتمسح...');
+  try {
+    const r = await api('resetPreview', {});
+    const list = arr => arr.length
+      ? arr.map(x => `<div class="stat-line"><span>${esc(x.name)}</span><b>${money(x.rows)} صف</b></div>`).join('')
+      : '<div class="muted">مفيش بيانات</div>';
+    openModal(`
+      <h2>🧹 تنضيف بيانات التجربة</h2>
+      <div class="card" style="border-right:4px solid var(--red)">
+        <b>⚠️ هيتمسح (الحركات):</b>${list(r.transactional)}
+      </div>
+      <div class="card" style="border-right:4px solid var(--green)">
+        <b>✅ هيفضل زي ما هو:</b>${list(r.master)}
+      </div>
+      <label>مستوى التنضيف</label>
+      <select id="rs-scope">
+        <option value="transactions">الحركات بس (زيارات، طلبات، تحصيلات، تتبع، متابعات)</option>
+        <option value="synced">+ بيانات قيود المتزامنة (بترجع بأول مزامنة)</option>
+        <option value="customers_too">+ تصفير أرصدة العملاء وأعمار الديون</option>
+      </select>
+      <p class="muted mt">هتتاخد <b>نسخة احتياطية كاملة</b> قبل المسح تلقائيًا. لو النسخة فشلت، المسح بيتلغي.</p>
+      <label>اكتب كلمة <b>مسح</b> للتأكيد</label>
+      <input id="rs-confirm" placeholder="مسح">
+      <div class="modal-actions">
+        <button class="btn red" onclick="A.resetRun()">تنفيذ التنضيف</button>
+        <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+      </div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.resetRun = async () => {
+  const payload = { scope: $('#rs-scope').value, confirm: $('#rs-confirm').value.trim() };
+  if (payload.confirm !== 'مسح') return toast('اكتب كلمة "مسح" للتأكيد', 'err');
+  closeModal();
+  toast('⏳ بياخد نسخة احتياطية وبينضف...');
+  try {
+    const r = await api('resetTestData', payload);
+    alert(r.message + '\n\n' + (r.backup || ''));
+    toast('✅ النظام جاهز للتشغيل', 'ok');
+    refresh(true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
 // ----- الأرشفة وأحجام البيانات -----
 A.archiveNow = async () => {
   if (!confirm('هينقل البيانات القديمة لجداول أرشيف في نفس الملف. نكمل؟')) return;
@@ -2886,30 +2962,33 @@ A.copyDiag = (json) => {
   else toast('انسخه يدوي من الشاشة', 'err');
 };
 
+// ==================== [ features.js ] ====================
+/* CRM روافد — فيتشرز مشتركة: الترتيب، الصوت، التوقيع والصور، الطلبات، التحصيلات، العهدة */
+
 // ================== لوحة تنافس المناديب ==================
-A.leaderboard = async (period) => {
+A.leaderboard = async (period, metric) => {
   S.lbPeriod = period || S.lbPeriod || 'week';
-  S.lbSort = S.lbSort || 'visits';
+  S.lbSort = metric || S.lbSort || 'visits';
   toast('⏳ بجهز الترتيب...');
   try {
-    const r = await api('leaderboard', { period: S.lbPeriod });
-    S.lb = r;
+    S.lb = await api('leaderboard', { period: S.lbPeriod, metric: S.lbSort });
     renderLeaderboard();
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
-A.lbSort = (key) => { S.lbSort = key; renderLeaderboard(); };
-A.lbPeriod = (p) => { A.leaderboard(p); };
+A.lbSort = (key) => A.leaderboard(S.lbPeriod, key);
+A.lbPeriod = (p) => A.leaderboard(p, S.lbSort);
+
+const LB_MEDALS = ['🥇', '🥈', '🥉'];
+const LB_METRICS = [
+  ['visits', 'الزيارات'], ['coverage', 'التغطية'],
+  ['collected', 'التحصيلات'], ['netSales', 'صافي المبيعات']
+];
 
 function renderLeaderboard() {
   const r = S.lb;
-  const key = S.lbSort;
-  const rows = r.rows.slice().sort((a, b) => (Number(b[key]) || 0) - (Number(a[key]) || 0));
-  const medals = ['🥇', '🥈', '🥉'];
-  const metrics = [
-    ['visits', 'الزيارات'], ['coverage', 'التغطية %'],
-    ['collected', 'التحصيلات'], ['netSales', 'صافي المبيعات']
-  ];
-  openModal(`
+  const key = r.metric || 'visits';
+  const metricName = (LB_METRICS.find(m => m[0] === key) || [, ''])[1];
+  const head = `
     <h2>🏆 ترتيب المناديب</h2>
     <p class="modal-sub">${esc(r.period)} — من ${esc(r.from)} إلى ${esc(r.to)}</p>
     <div class="pill-row">
@@ -2917,22 +2996,57 @@ function renderLeaderboard() {
       <button class="pill ${S.lbPeriod === 'month' ? 'active' : ''}" onclick="A.lbPeriod('month')">الشهر</button>
     </div>
     <div class="pill-row">
-      ${metrics.map(m => `<button class="pill ${key === m[0] ? 'active' : ''}" onclick="A.lbSort('${m[0]}')">ترتيب بـ ${m[1]}</button>`).join('')}
+      ${LB_METRICS.map(m => `<button class="pill ${key === m[0] ? 'active' : ''}" onclick="A.lbSort('${m[0]}')">ترتيب بـ ${m[1]}</button>`).join('')}
+    </div>`;
+
+  // ===== شاشة الأدمن: كل الأرقام =====
+  if (r.isAdmin) {
+    openModal(head + `
+      <div class="table-wrap"><table>
+        <tr><th>#</th><th>المندوب</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>المسافة</th></tr>
+        ${r.rows.map(x => `<tr>
+          <td><b>${LB_MEDALS[x.rank - 1] || x.rank}</b></td>
+          <td><b>${esc(x.rep_name)}</b>${x.region ? '<div class="muted" style="font-size:11px">' + esc(x.region) + '</div>' : ''}</td>
+          <td><b>${x.visits}</b></td>
+          <td><span class="badge ${x.coverage >= 80 ? 'cool' : x.coverage >= 50 ? 'warm' : 'hot'}">${x.coverage}%</span>
+            <div class="muted" style="font-size:11px">${x.covered} من ${x.customers}</div></td>
+          <td class="pos">${money(x.collected)}</td>
+          <td>${money(x.netSales)}</td>
+          <td>${x.distanceKm ? x.distanceKm + ' كم' : '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+      </table></div>
+      <p class="muted mt">المناديب بيشوفوا مركزهم وأرقامهم هم بس — مش أرقام بعض.</p>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+    return;
+  }
+
+  // ===== شاشة المندوب: مركزه وأرقامه هو بس =====
+  const me = r.rows.find(x => x.me);
+  openModal(head + `
+    ${me ? `<div class="card" style="border-right:4px solid var(--blue);text-align:center">
+      <div style="font-size:34px;font-weight:800;color:var(--blue)">${LB_MEDALS[me.rank - 1] || ('#' + me.rank)}</div>
+      <div><b>مركزك ${me.rank} من ${r.total}</b> في ${esc(metricName)}</div>
     </div>
+    <div class="card">
+      <h3>أرقامك ${esc(r.period === 'الشهر' ? 'الشهر ده' : 'الأسبوع ده')}</h3>
+      <div class="stat-line"><span>الزيارات المنفذة</span><b>${me.visits}</b></div>
+      <div class="stat-line"><span>تغطية عملائك</span>
+        <b><span class="badge ${me.coverage >= 80 ? 'cool' : me.coverage >= 50 ? 'warm' : 'hot'}">${me.coverage}%</span>
+        <span class="muted" style="font-size:12px"> (${me.covered} من ${me.customers})</span></b></div>
+      <div class="stat-line"><span>التحصيلات</span><b class="pos">${moneyC(me.collected)}</b></div>
+      <div class="stat-line"><span>صافي المبيعات</span><b>${moneyC(me.netSales)}</b></div>
+      ${me.distanceKm ? `<div class="stat-line"><span>المسافة المقطوعة</span><b>${me.distanceKm} كم</b></div>` : ''}
+    </div>` : '<div class="empty">لسه مفيش أرقام ليك في الفترة دي</div>'}
+    <div class="section-title"><span>الترتيب</span></div>
     <div class="table-wrap"><table>
-      <tr><th>#</th><th>المندوب</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>المسافة</th></tr>
-      ${rows.map((x, i) => `<tr ${String(x.rep_id) === String(r.me) ? 'style="background:var(--blue-soft)"' : ''}>
-        <td><b>${medals[i] || (i + 1)}</b></td>
-        <td><b>${esc(x.rep_name)}</b>${x.region ? '<div class="muted" style="font-size:11px">' + esc(x.region) + '</div>' : ''}</td>
-        <td><b>${x.visits}</b></td>
-        <td><span class="badge ${x.coverage >= 80 ? 'cool' : x.coverage >= 50 ? 'warm' : 'hot'}">${x.coverage}%</span>
-          <div class="muted" style="font-size:11px">${x.covered} من ${x.customers}</div></td>
-        <td class="pos">${money(x.collected)}</td>
-        <td>${money(x.netSales)}</td>
-        <td>${x.distanceKm ? x.distanceKm + ' كم' : '—'}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+      <tr><th>#</th><th>المندوب</th><th>${esc(metricName)}</th></tr>
+      ${r.rows.map(x => `<tr ${x.me ? 'style="background:var(--blue-soft)"' : ''}>
+        <td><b>${LB_MEDALS[x.rank - 1] || x.rank}</b></td>
+        <td>${esc(x.rep_name)}${x.me ? ' <span class="badge info">انت</span>' : ''}</td>
+        <td>${x.me ? '<b>' + (key === 'coverage' ? x.coverage + '%' : key === 'visits' ? x.visits : money(x[key])) + '</b>' : '<span class="muted">—</span>'}</td>
+      </tr>`).join('') || '<tr><td colspan="3" class="muted">مفيش بيانات</td></tr>'}
     </table></div>
-    <p class="muted mt">التغطية = عملاء المنطقة اللي اتزاروا فعليًا في الفترة. التحصيلات والمبيعات من قيود حسب منطقة كل مندوب.</p>
+    <p class="muted mt">بتشوف مركزك وأرقامك انت بس — أرقام زمايلك خاصة بيهم.</p>
     <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
 }
 
@@ -3349,6 +3463,9 @@ A.expenseSave = async () => {
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
+// ==================== [ tracking.js ] ====================
+/* CRM روافد — تتبع خط السير بالـ GPS */
+
 // ================== تتبع خط السير ==================
 /**
  * بيسجل نقطة كل بضع دقايق أو لما المندوب يتحرك مسافة كافية، والتطبيق مفتوح.
@@ -3505,6 +3622,9 @@ async function flushTrack() {
   } catch (e) { /* هنحاول تاني بعدين */ }
 }
 
+// ==================== [ boot.js ] ====================
+/* CRM روافد — نقطة التشغيل (لازم يتحمّل آخر واحد) */
+
 // ================== التشغيل ==================
 window.addEventListener('online', () => { document.body.classList.remove('is-offline'); qflush(); flushTrack(); });
 window.addEventListener('offline', () => document.body.classList.add('is-offline'));
@@ -3525,3 +3645,4 @@ if (S.token) {
     ensureTracking(true);
   });
 }
+
