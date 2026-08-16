@@ -227,6 +227,8 @@ tr:last-child td { border-bottom: none; }
   animation: slideUp .22s ease;
 }
 @media (min-width: 640px) { .modal { border-radius: 20px; } }
+/** للمودالات اللي فيها جداول عريضة (زي معاينة قيد المصروفات) — على الشاشة الكبيرة بس */
+@media (min-width: 900px) { .modal.wide { max-width: 860px; } }
 @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 .modal h2 { font-size: 17px; margin-bottom: 4px; }
 .modal .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
@@ -320,6 +322,11 @@ tr:last-child td { border-bottom: none; }
 }
 .attach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .attach-grid img { width: 100%; border-radius: 10px; border: 1px solid var(--border); background: #fff; }
+.attach-cell {
+  min-height: 110px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border); border-radius: 10px; font-size: 12px; padding: 6px; text-align: center;
+}
+.attach-cell:has(img) { border: none; padding: 0; display: block; min-height: 0; }
 
 /* ---------- اللوجو ---------- */
 .logo-img { object-fit: contain; border-radius: 12px; background: #fff; padding: 3px; }

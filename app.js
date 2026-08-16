@@ -31,6 +31,12 @@ function todayDayIndex() { // السبت=1 ... الخميس=6، الجمعة=0
   return { 6: 1, 0: 2, 1: 3, 2: 4, 3: 5, 4: 6, 5: 0 }[new Date().getDay()];
 }
 function dayLabel(i) { return ['—', 'السبت', 'الحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس'][Number(i)] || '—'; }
+/** تاريخ النهارده بتوقيت الجهاز — toISOString بيرجّع توقيت جرينتش فبيقول امبارح بالليل */
+function todayISO(d) {
+  d = d || new Date();
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 /** الكيبورد العربي بيكتب ٠١٢٣ — بنحولها لأرقام إنجليزية عشان الدخول ميفشلش */
 function normDigits(s) {
@@ -50,6 +56,68 @@ function cur() {
   return s.CURRENCY || localStorage.getItem('crm_currency') || 'ر.س';
 }
 function moneyC(n) { return money(n) + ' ' + cur(); }
+
+// ===== المبلغ بالحروف (لسندات القبض) =====
+const AR_ONES = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة',
+  'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر', 'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'];
+const AR_TENS = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+const AR_HUNDREDS = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة', 'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة'];
+
+/** من 1 لـ 999 */
+function arBelow1000(n) {
+  const parts = [];
+  const h = Math.floor(n / 100), r = n % 100;
+  if (h) parts.push(AR_HUNDREDS[h]);
+  if (r < 20) { if (r) parts.push(AR_ONES[r]); }
+  else {
+    const u = r % 10, t = Math.floor(r / 10);
+    parts.push(u ? AR_ONES[u] + ' و' + AR_TENS[t] : AR_TENS[t]);
+  }
+  return parts.join(' و');
+}
+/**
+ * صيغة المجموعة حسب آخر جزء من العدد (تمييز العدد):
+ * ألف · ألفان · ثلاثة آلاف · أحد عشر ألفًا · مائة ألف · مائتا ألف
+ */
+function arGroup(n, one, two, few, many) {
+  if (n === 1) return one;
+  if (n === 2) return two;
+  const words = arBelow1000(n), r = n % 100;
+  // مضاعفات المائة بتاخد المفرد مضافًا إليه: «مائة ألف» مش «مائة ألفًا»
+  if (r === 0) return words.replace(/مائتان$/, 'مائتا') + ' ' + one;
+  if (r >= 3 && r <= 10) return words + ' ' + few;
+  return words + ' ' + many;
+}
+/** رقم صحيح بالحروف العربية */
+function arIntWords(n) {
+  n = Math.floor(Math.abs(Number(n) || 0));
+  if (n === 0) return 'صفر';
+  if (n > 999999999) return '';           // أكبر من كده مش هيحصل في سند
+  const parts = [];
+  const mil = Math.floor(n / 1000000);
+  const th = Math.floor((n % 1000000) / 1000);
+  const rest = n % 1000;
+  if (mil) parts.push(arGroup(mil, 'مليون', 'مليونان', 'ملايين', 'مليونًا'));
+  if (th) parts.push(arGroup(th, 'ألف', 'ألفان', 'آلاف', 'ألفًا'));
+  if (rest) parts.push(arBelow1000(rest));
+  return parts.join(' و');
+}
+/**
+ * المبلغ كامل بالحروف زي ما بيتكتب في السندات:
+ * "فقط مائة وخمسة عشر ريالاً سعودياً وخمسة وسبعون هللة لا غير"
+ */
+function amountInWords(amount, unitWord, subWord) {
+  const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
+  const unit = unitWord || s.CURRENCY_WORDS || 'ريالاً سعودياً';
+  const sub = subWord || s.SUBUNIT_WORDS || 'هللة';
+  const total = Math.round((Number(amount) || 0) * 100);
+  const whole = Math.floor(total / 100), cents = total % 100;
+  if (!whole && !cents) return 'فقط صفر ' + unit + ' لا غير';
+  const bits = [];
+  if (whole) bits.push(arIntWords(whole) + ' ' + unit);
+  if (cents) bits.push(arIntWords(cents) + ' ' + sub);
+  return 'فقط ' + bits.join(' و') + ' لا غير';
+}
 /** اللوجو بيتخزن على الجهاز — السيرفر بيبعت بصمته بس مع كل تحديث */
 function logoSrc() { return localStorage.getItem('crm_logo') || ''; }
 async function syncLogo() {
@@ -122,10 +190,21 @@ async function api(action, payload, opts) {
   return res;
 }
 
+/**
+ * بيحط العملية في طابور الأوفلاين. بيرجّع false لو مساحة الجهاز خلصت —
+ * السندات بقت جواها صورة، فلازم المندوب يعرف إن الحفظ فشل مش يفتكره اتحفظ.
+ */
 function qpush(action, payload) {
   S.queue.push({ action, payload, ts: Date.now() });
-  save('crm_queue', S.queue);
+  try {
+    save('crm_queue', S.queue);
+  } catch (e) {
+    S.queue.pop();
+    toast('📵 مساحة الجهاز خلصت — السند مااتحفظش. اتصل بالنت وحاول تاني', 'err');
+    return false;
+  }
   render();
+  return true;
 }
 
 async function qflush() {
@@ -176,10 +255,11 @@ function toast(msg, cls) {
   setTimeout(() => el.remove(), 3400);
 }
 let modalCleanup = null;
-function openModal(html, onOpen) {
+function openModal(html, onOpen, wide) {
   closeModal();
   const root = $('#modal-root');
-  root.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)A.closeModal()"><div class="modal">' + html + '</div></div>';
+  root.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)A.closeModal()">' +
+    '<div class="modal' + (wide ? ' wide' : '') + '">' + html + '</div></div>';
   if (onOpen) modalCleanup = onOpen() || null;
 }
 function closeModal() {
@@ -867,14 +947,16 @@ function viewMine() {
       ? (cols.length ? cols.map(c => `<div class="cust-card" style="padding:11px 13px">
           <div class="cust-head">
             <div><div class="cust-name" style="font-size:14.5px">${esc(c.customer_name)}</div>
-              <div class="cust-meta">${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
+              <div class="cust-meta">${c.voucher ? 'سند ' + esc(c.voucher) + ' • ' : ''}${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
                 ${c.reference ? '• ' + esc(c.reference) : ''}</div></div>
             <div style="text-align:left"><b class="pos">${money(c.amount)}</b>
               <div>${c.status === 'مرسل' ? '<span class="badge cool">اتسجل</span>'
                 : c.status === 'بانتظار البنك' ? '<span class="badge warm">🏦 مستني البنك</span>'
                 : c.status === 'مطابق' ? '<span class="badge info">🏦 وصل البنك</span>'
                 : '<span class="badge warm">مستني</span>'}</div></div>
-          </div></div>`).join('') : '<div class="empty"><div class="big">💵</div>لسه مسجلتش تحصيلات</div>')
+          </div>
+          ${c.receipt ? `<button class="btn sm ghost mt" onclick="A.myReceipt('${c.id}')">📄 اعرض السند</button>` : ''}
+          </div>`).join('') : '<div class="empty"><div class="big">💵</div>لسه مسجلتش تحصيلات</div>')
       : (orders.length ? orders.map(o => `<div class="cust-card" style="padding:11px 13px">
           <div class="cust-head">
             <div><div class="cust-name" style="font-size:14.5px">${esc(o.customer_name)}</div>
@@ -884,6 +966,22 @@ function viewMine() {
           </div></div>`).join('') : '<div class="empty"><div class="big">🛒</div>لسه مسجلتش طلبات</div>')}`;
 }
 A.mineTab = (t) => { S.mineTab = t; render(); };
+/** المندوب يعرض سند قبض سجّله — يوريه للعميل لو حصل خلاف */
+A.myReceipt = async (id) => {
+  const c = ((S.sales && S.sales.collections) || []).find(x => String(x.id) === String(id));
+  if (!c || !c.receipt) return toast('السند ده مفيهوش صورة', 'err');
+  toast('⏳ بجيب السند...');
+  try {
+    const r = await api('getAttachment', { url: c.receipt });
+    openModal(`
+      <h2>📄 سند قبض رقم ${esc(c.voucher || '—')}</h2>
+      <p class="modal-sub">${esc(c.customer_name)} — ${esc(String(c.date).slice(0, 10))}</p>
+      <div style="background:#fff;border-radius:10px;padding:6px;text-align:center">
+        <img src="${r.data}" alt="سند قبض" style="max-width:100%;border-radius:6px">
+      </div>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || (e.offline ? 'عرض السند محتاج نت' : 'خطأ'), 'err'); }
+};
 
 // ----- تبويب العملاء -----
 function viewCustomers() {
@@ -1467,9 +1565,11 @@ function adSales() {
       <button class="pill ${sub === 'orders' ? 'active' : ''}" onclick="A.salesTab('orders')">🛒 الطلبات</button>
       <button class="pill ${sub === 'collections' ? 'active' : ''}" onclick="A.salesTab('collections')">💵 التحصيلات</button>
       <button class="pill ${sub === 'cash' ? 'active' : ''}" onclick="A.salesTab('cash')">💰 عهد المناديب</button>
+      <button class="pill ${sub === 'expenses' ? 'active' : ''}" onclick="A.salesTab('expenses')">🧾 المصروفات</button>
+      <button class="pill ${sub === 'journal' ? 'active' : ''}" onclick="A.salesTab('journal')">📒 ترحيل المصروفات لقيود</button>
       <button class="pill ${sub === 'bank' ? 'active' : ''}" onclick="A.salesTab('bank')">🏦 مطابقة البنك</button>
     </div>
-    ${sub === 'bank' ? adBank() : sub === 'orders' ? `
+    ${sub === 'bank' ? adBank() : sub === 'journal' ? adExpJournal() : sub === 'expenses' ? adExpenses() : sub === 'orders' ? `
       <div class="table-wrap"><table>
         <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
         ${orders.map(o => `<tr>
@@ -1493,21 +1593,27 @@ function adSales() {
         </div>`).join('')}
       </div>` : ''}
       <div class="table-wrap"><table>
-        <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
+        <tr><th>التاريخ</th><th>سند رقم</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
         ${cols.map(c => `<tr>
           <td>${esc(String(c.date).slice(0, 10))} <span class="muted">${esc(c.time || '')}</span></td>
+          <td><b>${esc(c.voucher || '—')}</b></td>
           <td><b>${esc(c.customer_name)}</b></td>
           <td>${esc(c.rep_name)}</td>
           <td><b style="color:var(--green)">${money(c.amount)}</b></td>
           <td>${esc(c.method)}</td>
-          <td>${esc(c.reference || '—')}${c.signature ? ' ' + attachLinks({ signature: c.signature }) : ''}</td>
+          <td>${esc(c.reference || '—')}</td>
           <td>${c.status === 'بانتظار البنك' ? '<span class="badge warm">🏦 مستني البنك</span>'
               : c.status === 'مطابق' ? '<span class="badge info">🏦 اتطابق</span>'
               : statusBadge(c.status, c.error)}
             ${c.bank_name ? '<div class="muted" style="font-size:11px">' + esc(c.bank_name) + '</div>' : ''}</td>
           <td>${c.settlement_id ? '<span class="badge cool">اتورد</span>' : (c.method === 'كاش' ? '<span class="badge warm">في العهدة</span>' : '—')}</td>
-          <td>${c.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushCollection('${c.id}')">📤 ابعت</button>` : ''}</td>
-        </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش تحصيلات لسه</td></tr>'}
+          <td style="white-space:nowrap">
+            ${c.receipt ? `<button class="btn sm ghost" onclick="A.viewReceipt('${c.id}')">📄 السند</button>`
+              : c.signature ? attachLinks({ signature: c.signature })
+              : '<span class="muted" style="font-size:11px">مفيش سند</span>'}
+            ${c.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushCollection('${c.id}')">📤 ابعت</button>` : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="10" class="muted">مفيش تحصيلات لسه</td></tr>'}
       </table></div>`
     : `
       <div class="table-wrap"><table>
@@ -1550,6 +1656,371 @@ function adSales() {
         </tr>`).join('') || '<tr><td colspan="9" class="muted">مفيش توريدات</td></tr>'}
       </table></div>`}`;
 }
+
+// ----- تقرير المصروفات (بأي فترة، حتى القديمة والمؤرشفة) -----
+function adExpenses() {
+  const r = S.exp;
+  const reps = (S.data.users || []).filter(u => u.role === 'rep');
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + '01';
+  const cats = (r && r.categories) || [];
+  return `
+    <div class="card">
+      <h3>🧾 تقرير المصروفات</h3>
+      <div class="grid2">
+        <div><label>من تاريخ</label><input type="date" id="ex-from" value="${esc((r && r.from) || monthStart)}"></div>
+        <div><label>إلى تاريخ</label><input type="date" id="ex-to" value="${esc((r && r.to) || today)}"></div>
+      </div>
+      <div class="grid2">
+        <div><label>المندوب</label>
+          <select id="ex-rep"><option value="">كل المناديب</option>
+            ${reps.map(u => `<option value="${esc(u.id)}" ${S.expRep === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+          </select></div>
+        <div><label>نوع المصروف</label>
+          <select id="ex-cat"><option value="">كل الأنواع</option>
+            ${cats.map(c => `<option ${S.expCat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+          </select></div>
+      </div>
+      <label><input type="checkbox" id="ex-arch" ${S.expArch ? 'checked' : ''} style="width:auto"> ضم المصروفات المؤرشفة (الأقدم من سنة)</label>
+      <div class="flex mt">
+        <button class="btn" onclick="A.loadExpenses()">عرض التقرير</button>
+        <button class="btn ghost" onclick="A.quickExp('month')">الشهر ده</button>
+        <button class="btn ghost" onclick="A.quickExp('year')">من أول السنة</button>
+        <button class="btn ghost" onclick="A.quickExp('all')">من البداية</button>
+      </div>
+    </div>
+    ${!r ? '<div class="empty"><div class="big">🧾</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num" style="color:var(--red)">${money(r.total)}</div>
+          <div class="lbl">إجمالي المصروفات (${esc(r.currency)})</div></div>
+        <div class="kpi"><div class="num">${r.count}</div><div class="lbl">عدد الحركات</div></div>
+        ${r.byRep.slice(0, 2).map(x => `<div class="kpi"><div class="num">${money(x.total)}</div>
+          <div class="lbl">${esc(x.name)}</div></div>`).join('')}
+      </div>
+      ${r.byCategory.length ? `<div class="section-title"><span>حسب النوع</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>النوع</th><th>الإجمالي</th><th>النسبة</th></tr>
+          ${r.byCategory.map(c => `<tr><td><span class="badge info">${esc(c.name)}</span></td>
+            <td><b>${money(c.total)}</b></td>
+            <td>${r.total ? Math.round(c.total / r.total * 100) : 0}%</td></tr>`).join('')}
+        </table></div>` : ''}
+      ${r.byRep.length > 1 ? `<div class="section-title"><span>حسب المندوب</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>المندوب</th><th>الإجمالي</th><th>النسبة</th></tr>
+          ${r.byRep.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${money(x.total)}</td>
+            <td>${r.total ? Math.round(x.total / r.total * 100) : 0}%</td></tr>`).join('')}
+        </table></div>` : ''}
+      <div class="section-title"><span>التفاصيل (${r.rows.length}${r.truncated ? ' من ' + r.count : ''})</span>
+        <button class="btn sm ghost" onclick="A.exportExpenses()">⬇️ تنزيل Excel</button></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>سند رقم</th><th>المندوب</th><th>النوع</th><th>المبلغ</th><th>البيان</th>
+            <th>قيود</th><th>التوريد</th></tr>
+        ${r.rows.map(e => `<tr>
+          <td>${esc(e.date)} <span class="muted">${esc(e.time || '')}</span></td>
+          <td><b>${esc(e.voucher || '—')}</b></td>
+          <td>${esc(e.rep_name)}</td>
+          <td><span class="badge info">${esc(e.category)}</span></td>
+          <td><b class="neg">${money(e.amount)}</b></td>
+          <td>${esc(e.description || '')}</td>
+          <td>${e.pushStatus === 'مرحّل' ? '<span class="badge cool">قيد ' + esc(e.entryId) + '</span>'
+                : e.pushStatus === 'فشل' ? '<span class="badge hot">فشل</span>'
+                : '<span class="badge gray">لسه</span>'}</td>
+          <td>${e.settled ? '<span class="badge cool">اتورد ' + esc(e.settledDate) + '</span>'
+                          : '<span class="badge warm">مفتوح</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش مصروفات في الفترة دي</td></tr>'}
+      </table></div>
+      ${r.truncated ? '<p class="muted">معروض أول 500 حركة — ضيّق الفترة أو نزّل الملف للتفاصيل الكاملة.</p>' : ''}
+    `}`;
+}
+
+A.loadExpenses = async () => {
+  const payload = {
+    from: ($('#ex-from') || {}).value || '', to: ($('#ex-to') || {}).value || '',
+    rep_id: ($('#ex-rep') || {}).value || '', category: ($('#ex-cat') || {}).value || '',
+    includeArchive: ($('#ex-arch') || {}).checked || false
+  };
+  S.expRep = payload.rep_id; S.expCat = payload.category; S.expArch = payload.includeArchive;
+  toast('⏳ بجهز التقرير...');
+  try { S.exp = await api('expenseReport', payload); render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.quickExp = (kind) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = kind === 'month' ? today.slice(0, 8) + '01'
+             : kind === 'year' ? today.slice(0, 4) + '-01-01' : '';
+  $('#ex-from').value = from;
+  $('#ex-to').value = today;
+  if (kind === 'all') $('#ex-arch').checked = true;
+  A.loadExpenses();
+};
+A.exportExpenses = () => {
+  const rows = (S.exp.rows || []).map(e => ({
+    'التاريخ': e.date, 'الوقت': e.time, 'رقم السند': e.voucher || '',
+    'المندوب': e.rep_name, 'النوع': e.category,
+    'المبلغ': e.amount, 'البيان': e.description,
+    'قيد قيود': e.pushStatus === 'مرحّل' ? e.entryId : (e.pushStatus || 'لسه'),
+    'حالة التوريد': e.settled ? 'اتورد ' + e.settledDate : 'مفتوح'
+  }));
+  downloadCsv('تقرير_المصروفات_' + (S.exp.from || 'من_البداية') + '_' + (S.exp.to || 'للنهارده'), rows);
+};
+
+// ----- ترحيل مصروفات المناديب لقيود كقيد يومية -----
+// المندوب كتب: رقم السند + البيان + القيمة + التاريخ.
+// الأدمن هنا بيحدد: الحساب لكل مصروف + فيه ضريبة ولا لأ + وبيرحّل.
+function adExpJournal() {
+  const r = S.expj;
+  if (!r) { A.loadExpJournal(); return '<div class="empty"><div class="big">⏳</div>بيحمل المصروفات...</div>'; }
+  const accs = A._accounts || [];
+  const rows = (r.rows || []).filter(e => !S.expjRep || String(e.rep_id) === String(S.expjRep));
+  const ready = rows.filter(e => e.account_id);
+  const accSelect = (id, current) => `<select class="exj-acc" data-id="${esc(id)}" onchange="A.expjSet('${esc(id)}','acc',this.value)">
+      ${accs.length
+        ? '<option value="">— اختار الحساب —</option>' + accs.map(a =>
+            `<option value="${esc(String(a.id))}" ${String(a.id) === String(current || '') ? 'selected' : ''}>${esc(a.name)}</option>`).join('')
+        : `<option value="${esc(String(current || ''))}">${current ? 'حساب ' + esc(String(current)) : '— اضغط جيب الحسابات —'}</option>`}
+    </select>`;
+
+  return `
+    <div class="card">
+      <h3>📒 ترحيل المصروفات لقيود (قيد يومية)</h3>
+      <p class="muted">المندوب سجّل السند والبيان والقيمة والتاريخ. انت اللي بتحدد الحساب والضريبة وبترحّل.
+      أرقام السندات كلها بتتكتب في تفاصيل القيد على قيود عشان تبقى مرجع.</p>
+      ${!accs.length ? `<button class="btn sm" onclick="A.expjAccounts()">🔄 جيب الحسابات من قيود</button>` : ''}
+      <div class="grid2 mt">
+        <div><label>الحساب الدائن (الفلوس خرجت منه)</label>
+          <select id="exj-credit">
+            ${accs.length
+              ? '<option value="">— اختار —</option>' + accs.map(a =>
+                  `<option value="${esc(String(a.id))}" ${String(a.id) === String(r.creditAccount || '') ? 'selected' : ''}>${esc(a.name)}</option>`).join('')
+              : `<option value="${esc(String(r.creditAccount || ''))}">${r.creditAccount ? 'حساب ' + esc(String(r.creditAccount)) : '— اضغط جيب الحسابات —'}</option>`}
+          </select></div>
+        <div><label>حساب ضريبة المدخلات (${r.vatPercent}%)</label>
+          <select id="exj-vatacc">
+            ${accs.length
+              ? '<option value="">— اختار —</option>' + accs.map(a =>
+                  `<option value="${esc(String(a.id))}" ${String(a.id) === String(r.vatAccount || '') ? 'selected' : ''}>${esc(a.name)}</option>`).join('')
+              : `<option value="${esc(String(r.vatAccount || ''))}">${r.vatAccount ? 'حساب ' + esc(String(r.vatAccount)) : '— اضغط جيب الحسابات —'}</option>`}
+          </select></div>
+      </div>
+      <div class="flex mt">
+        <button class="btn ghost sm" onclick="A.expjSaveAccounts()">💾 احفظ الحسابات دي</button>
+        <button class="btn ghost sm" onclick="A.expjDefaults()">⚙️ حساب افتراضي لكل نوع مصروف</button>
+        <button class="btn ghost sm" onclick="A.loadExpJournal()">🔄 تحديث</button>
+      </div>
+      ${(!r.creditAccount) ? '<p class="muted mt" style="color:var(--amber)">⚠️ لازم تحدد الحساب الدائن وتحفظه قبل أي ترحيل.</p>' : ''}
+    </div>
+
+    ${!rows.length ? '<div class="empty"><div class="big">✅</div>مفيش مصروفات مستنية الترحيل</div>' : `
+    <div class="card">
+      <div class="grid2">
+        <div><label>المندوب</label>
+          <select onchange="S.expjRep=this.value; render()">
+            <option value="">كل المناديب</option>
+            ${(S.data.users || []).filter(u => u.role === 'rep').map(u =>
+              `<option value="${esc(u.id)}" ${String(S.expjRep) === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+          </select></div>
+        <div><label>تاريخ القيد</label><input type="date" id="exj-date" value="${todayISO()}"></div>
+      </div>
+      <div class="flex mt">
+        <button class="btn ghost sm" onclick="A.expjSelectAll(true)">✅ حدد الكل</button>
+        <button class="btn ghost sm" onclick="A.expjSelectAll(false)">⬜ إلغاء التحديد</button>
+        <button class="btn ghost sm" onclick="A.expjBulkAcc()">📌 طبّق حساب على المحدد</button>
+        <button class="btn ghost sm" onclick="A.expjBulkVat(true)">➕ شامل ضريبة</button>
+        <button class="btn ghost sm" onclick="A.expjBulkVat(false)">➖ من غير ضريبة</button>
+      </div>
+    </div>
+    <div class="section-title"><span>مستني الترحيل (${rows.length}) — جاهز منهم ${ready.length}</span>
+      <button class="btn sm amber" onclick="A.expjPreview()">👁 معاينة القيد</button></div>
+    <div class="table-wrap"><table>
+      <tr><th></th><th>التاريخ</th><th>سند رقم</th><th>المندوب</th><th>النوع</th><th>المبلغ</th>
+          <th>البيان</th><th>الحساب في قيود</th><th>شامل ضريبة؟</th><th></th></tr>
+      ${rows.map(e => `<tr>
+        <td><input type="checkbox" class="exj-sel" data-id="${esc(e.id)}" ${e.account_id ? 'checked' : ''}></td>
+        <td>${esc(e.date)}</td>
+        <td><b>${esc(e.voucher || '—')}</b></td>
+        <td>${esc(e.rep_name)}</td>
+        <td><span class="badge info">${esc(e.category)}</span></td>
+        <td><b class="neg">${money(e.amount)}</b></td>
+        <td>${esc(e.description || '')}</td>
+        <td>${accSelect(e.id, e.account_id)}</td>
+        <td style="text-align:center"><input type="checkbox" class="exj-vat" data-id="${esc(e.id)}"
+            ${e.has_vat ? 'checked' : ''} onchange="A.expjSet('${esc(e.id)}','vat',this.checked)"></td>
+        <td>${e.push_status === 'فشل' ? '<span class="badge hot" title="' + esc(e.push_error || '') + '">فشل قبل كده</span>' : ''}</td>
+      </tr>`).join('')}
+    </table></div>
+    <p class="muted">المبلغ اللي "شامل ضريبة" بيتقسم: الصافي على حساب المصروف، والضريبة على حساب المدخلات — والإجمالي بيتخصم من الحساب الدائن.</p>
+    `}`;
+}
+
+A.loadExpJournal = async () => {
+  if (A._expjLoading) return;
+  A._expjLoading = true;
+  try {
+    S.expj = await api('expensesToPush', {});
+    if (!A._accounts || !A._accounts.length) { try { await A.expjAccounts(true); } catch (e) { /* الشاشة بتشتغل من غيرهم */ } }
+    render();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  finally { A._expjLoading = false; }
+};
+A.expjAccounts = async (quiet) => {
+  if (!quiet) toast('⏳ بجيب الحسابات من قيود...');
+  const r = await api('qoyodLists', {});
+  A._accounts = r.accounts || [];
+  if (!quiet) { toast(A._accounts.length ? 'جبت ' + A._accounts.length + ' حساب ✅' : (r.accountsError || 'مفيش حسابات'), A._accounts.length ? 'ok' : 'err'); render(); }
+};
+/** بيحفظ اختيار الأدمن في الذاكرة عشان ميضيعش لما الشاشة تترسم تاني */
+A.expjSet = (id, what, val) => {
+  const row = (S.expj.rows || []).find(x => String(x.id) === String(id));
+  if (!row) return;
+  if (what === 'acc') row.account_id = val; else row.has_vat = !!val;
+};
+A.expjSelectAll = (on) => { document.querySelectorAll('.exj-sel').forEach(c => c.checked = on); };
+A.expjSelected = () => Array.from(document.querySelectorAll('.exj-sel'))
+  .filter(c => c.checked).map(c => c.dataset.id);
+A.expjBulkAcc = () => {
+  const accs = A._accounts || [];
+  if (!accs.length) return toast('اضغط "جيب الحسابات من قيود" الأول', 'err');
+  const ids = A.expjSelected();
+  if (!ids.length) return toast('حدد المصروفات الأول', 'err');
+  A._expjBulkIds = ids;
+  openModal(`
+    <h2>📌 حساب للمصروفات المحددة (${ids.length})</h2>
+    <label>الحساب في قيود</label>
+    <select id="exj-bulk-acc">${accs.map(a => `<option value="${esc(String(a.id))}">${esc(a.name)}</option>`).join('')}</select>
+    <div class="modal-actions">
+      <button class="btn" onclick="A.expjBulkAccApply()">طبّق</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.expjBulkAccApply = () => {
+  const val = $('#exj-bulk-acc').value;
+  const ids = A._expjBulkIds || A.expjSelected();
+  closeModal();
+  ids.forEach(id => A.expjSet(id, 'acc', val));
+  document.querySelectorAll('.exj-sel').forEach(c => {
+    if (!c.checked) return;
+    const sel = document.querySelector('.exj-acc[data-id="' + c.dataset.id + '"]');
+    if (sel) sel.value = val;
+  });
+  toast('اتطبق على ' + ids.length + ' مصروف', 'ok');
+};
+A.expjBulkVat = (on) => {
+  const ids = A.expjSelected();
+  if (!ids.length) return toast('حدد المصروفات الأول', 'err');
+  ids.forEach(id => A.expjSet(id, 'vat', on));
+  document.querySelectorAll('.exj-vat').forEach(c => { if (ids.indexOf(c.dataset.id) > -1) c.checked = on; });
+  toast(on ? 'اتحددوا "شامل ضريبة"' : 'اتشالت الضريبة', 'ok');
+};
+/** بيجمع اختيارات الأدمن من الشاشة */
+A.expjPayload = () => {
+  const ids = A.expjSelected();
+  const meta = {};
+  ids.forEach(id => {
+    const acc = document.querySelector('.exj-acc[data-id="' + id + '"]');
+    const vat = document.querySelector('.exj-vat[data-id="' + id + '"]');
+    meta[id] = { account_id: acc ? acc.value : '', has_vat: vat ? vat.checked : false };
+  });
+  return { ids: ids, meta: meta, date: ($('#exj-date') || {}).value || todayISO() };
+};
+A.expjPreview = async () => {
+  const p = A.expjPayload();
+  if (!p.ids.length) return toast('حدد المصروفات اللي عايز ترحّلها', 'err');
+  const missing = p.ids.filter(id => !p.meta[id].account_id);
+  if (missing.length) return toast('في ' + missing.length + ' مصروف من غير حساب — حدد الحساب الأول', 'err');
+  toast('⏳ بجهز القيد...');
+  try {
+    const r = await api('pushExpenseJournal', Object.assign({ dryRun: true }, p));
+    A._expjDraft = p;
+    renderExpjPreview(r.summary);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+function accName(id) {
+  const a = (A._accounts || []).find(x => String(x.id) === String(id));
+  return a ? a.name : 'حساب ' + id;
+}
+function renderExpjPreview(s) {
+  openModal(`
+    <h2>👁 معاينة القيد قبل الترحيل</h2>
+    <p class="modal-sub">${esc(s.date)} — ${s.count} سند</p>
+    <div class="card">
+      <div class="stat-line"><span>إجمالي المصروفات</span><b>${money(s.totalGross)} ${esc(s.currency)}</b></div>
+      <div class="stat-line"><span>منها صافي</span><b>${money(s.totalNet)}</b></div>
+      <div class="stat-line"><span>منها ضريبة</span><b>${money(s.totalVat)}</b></div>
+    </div>
+    <div class="section-title"><span>شكل القيد</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>الحساب</th><th>مدين</th><th>دائن</th></tr>
+      ${s.debits.map(d => `<tr><td>${esc(accName(d.account_id))}</td>
+        <td><b>${money(d.amount)}</b></td><td class="muted">—</td></tr>`).join('')}
+      ${s.credits.map(c => `<tr><td>${esc(accName(c.account_id))}</td>
+        <td class="muted">—</td><td><b>${money(c.amount)}</b></td></tr>`).join('')}
+      <tr style="background:var(--blue-soft)"><td><b>الإجمالي</b></td>
+        <td><b>${money(s.totalDebit)}</b></td><td><b>${money(s.totalCredit)}</b></td></tr>
+    </table></div>
+    <div class="section-title"><span>السندات اللي جوه القيد</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>سند</th><th>التاريخ</th><th>المندوب</th><th>البيان</th><th>المبلغ</th><th>ضريبة</th></tr>
+      ${s.lines.map(l => `<tr><td><b>${esc(l.voucher || '—')}</b></td><td>${esc(l.date)}</td>
+        <td>${esc(l.rep)}</td><td>${esc(l.description || '')}</td>
+        <td>${money(l.gross)}</td><td>${l.vat ? money(l.vat) : '—'}</td></tr>`).join('')}
+    </table></div>
+    ${s.problems && s.problems.length ? `<div class="card" style="border-right:4px solid var(--amber)">
+      <b>⚠️ اتساب من القيد:</b><ul>${s.problems.map(p => '<li>' + esc(p) + '</li>').join('')}</ul></div>` : ''}
+    <p class="muted mt">وصف القيد على قيود: <b>${esc(s.description)}</b></p>
+    <div class="modal-actions">
+      <button class="btn amber" onclick="A.expjPush()">📤 رحّل لقيود دلوقتي</button>
+      <button class="btn outline" onclick="A.closeModal()">رجوع</button>
+    </div>`, null, true);
+}
+A.expjPush = async () => {
+  const p = A._expjDraft;
+  if (!p) return toast('اعمل معاينة الأول', 'err');
+  closeModal();
+  toast('⏳ بيترحّل لقيود...');
+  try {
+    const r = await api('pushExpenseJournal', p);
+    toast(r.message, 'ok');
+    A._expjDraft = null;
+    A.loadExpJournal();
+  } catch (e) { toast(e.msg || 'خطأ في الترحيل', 'err'); A.loadExpJournal(); }
+};
+A.expjSaveAccounts = async () => {
+  const payload = {
+    map: (S.expj && S.expj.categoryAccounts) || {},
+    creditAccount: ($('#exj-credit') || {}).value || '',
+    vatAccount: ($('#exj-vatacc') || {}).value || ''
+  };
+  try { const r = await api('saveExpenseAccounts', payload); toast(r.message, 'ok'); A.loadExpJournal(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+/** حساب افتراضي لكل نوع مصروف — عشان المرة الجاية يتملي لوحده */
+A.expjDefaults = () => {
+  const r = S.expj, accs = A._accounts || [];
+  if (!accs.length) return toast('اضغط "جيب الحسابات من قيود" الأول', 'err');
+  openModal(`
+    <h2>⚙️ الحساب الافتراضي لكل نوع مصروف</h2>
+    <p class="modal-sub">لما المندوب يسجل مصروف من النوع ده، الحساب ده هيتحدد لوحده.</p>
+    ${(r.categories || []).map(c => `
+      <label>${esc(c)}</label>
+      <select class="exj-def" data-cat="${esc(c)}">
+        <option value="">— من غير —</option>
+        ${accs.map(a => `<option value="${esc(String(a.id))}" ${String(a.id) === String((r.categoryAccounts || {})[c] || '') ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+      </select>`).join('')}
+    <div class="modal-actions">
+      <button class="btn" onclick="A.expjDefaultsSave()">حفظ</button>
+      <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
+    </div>`);
+};
+A.expjDefaultsSave = async () => {
+  const map = {};
+  document.querySelectorAll('.exj-def').forEach(s => { if (s.value) map[s.dataset.cat] = s.value; });
+  closeModal();
+  try {
+    const r = await api('saveExpenseAccounts', { map: map });
+    toast(r.message, 'ok');
+    A.loadExpJournal();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
 
 // ----- مطابقة الحوالات البنكية -----
 function adBank() {
@@ -2471,6 +2942,63 @@ A.statementRun = async (custId) => {
 };
 A.printStatement = () => { window.print(); };
 
+// ----- سند القبض: عرض الصورة الأصلية + طباعة PDF -----
+A.viewReceipt = async (id) => {
+  const c = ((S.sales && S.sales.collections) || []).find(x => String(x.id) === String(id));
+  if (!c) return toast('السند مش موجود', 'err');
+  if (!c.receipt) return toast('السند ده مفيهوش صورة — اتسجل قبل التحديث', 'err');
+  toast('⏳ بجيب السند...');
+  try {
+    const r = await api('getAttachment', { url: c.receipt });
+    A._receipt = { c: c, img: r.data };
+    openModal(`
+      <h2>📄 سند قبض رقم ${esc(c.voucher || '—')}</h2>
+      <p class="modal-sub">${esc(c.customer_name)} — ${esc(String(c.date).slice(0, 10))}</p>
+      <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:6px;text-align:center">
+        <img src="${r.data}" alt="سند قبض" style="max-width:100%;border-radius:6px">
+      </div>
+      <p class="muted mt">دي الصورة اللي اتوقّعت وقتها بالظبط — مبتتغيرش.</p>
+      <div class="modal-actions">
+        <button class="btn" onclick="A.printReceipt()">🖨️ حفظ PDF / طباعة</button>
+        <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
+      </div>`);
+  } catch (e) { toast(e.msg || 'مقدرتش أفتح السند', 'err'); }
+};
+/** نموذج سند بأرقام وهمية — عشان الأدمن يشوف الشكل قبل التسليم */
+A.previewReceipt = async () => {
+  const sig = document.createElement('canvas');
+  sig.width = 600; sig.height = 220;
+  const c = sig.getContext('2d');
+  c.fillStyle = '#fff'; c.fillRect(0, 0, 600, 220);
+  c.strokeStyle = '#111'; c.lineWidth = 5; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(90, 150);
+  c.bezierCurveTo(190, 40, 270, 200, 360, 90);
+  c.bezierCurveTo(420, 35, 480, 170, 530, 115);
+  c.stroke();
+  const img = await composeReceipt({
+    voucher: '1001', date: todayISO(), time: '09:15',
+    customer: 'مؤسسة بقالة النور التجارية', amount: 3327.75, method: 'كاش',
+    reference: '', notes: 'دفعة تحت حساب فاتورة رقم 4471',
+    rep: 'اسم المندوب', sigCanvas: sig, company: companyName(), currency: cur()
+  });
+  openModal(`
+    <h2>👁 شكل سند القبض</h2>
+    <p class="modal-sub">نموذج بأرقام وهمية — الشكل ده اللي بيتحفظ مع كل تحصيل</p>
+    <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:6px;text-align:center">
+      <img src="${img}" alt="نموذج سند" style="max-width:100%;border-radius:6px">
+    </div>
+    <p class="muted mt">عايز تغيّر الاسم أو اللوجو؟ عدّلهم فوق واحفظ الإعدادات وشوفه تاني.</p>
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+};
+
+A.printReceipt = () => {
+  const r = A._receipt;
+  if (!r) return;
+  document.getElementById('print-area').innerHTML =
+    '<div style="text-align:center"><img src="' + r.img + '" style="max-width:100%"></div>';
+  window.print();
+};
+
 // ----- الأهداف -----
 function adTargets() {
   const reps = (S.data.users || []).filter(u => u.role === 'rep');
@@ -2651,9 +3179,13 @@ function adSettings() {
           <input type="file" id="s-logo-file" accept="image/*" onchange="A.logoPick(this)" style="display:none">
           <button class="btn sm ghost" onclick="document.getElementById('s-logo-file').click()">📤 اختار صورة اللوجو</button>
           ${logoSrc() ? '<button class="btn sm red" onclick="A.logoRemove()">حذف اللوجو</button>' : ''}
-          <p class="muted" style="margin-top:6px">الصورة بتتصغّر تلقائيًا. هتظهر في شاشة الدخول وفوق في التطبيق وفي كشوف الحساب.</p>
+          <p class="muted" style="margin-top:6px">الصورة بتتصغّر تلقائيًا. هتظهر في شاشة الدخول وفوق في التطبيق وفي كشوف الحساب وعلى سندات القبض.</p>
         </div>
       </div>
+      <div class="flex mt">
+        <button class="btn ghost sm" onclick="A.previewReceipt()">👁 شوف شكل سند القبض</button>
+      </div>
+      <p class="muted">السند ده اللي العميل هيوقّع عليه وهيتحفظ بالصورة — شوفه قبل ما تسلّم النظام للمناديب.</p>
     </div>
     <div class="card">
       <h3>📍 تتبع خطوط السير</h3>
@@ -3343,6 +3875,143 @@ A.sigClear = (id) => {
   initSignature(id);
 };
 
+// ================== سند القبض الكامل ==================
+/** بيقسّم النص لسطور تدخل في العرض المتاح */
+function wrapLines(ctx, text, maxW) {
+  const words = String(text == null ? '' : text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  words.forEach(w => {
+    const t = line ? line + ' ' + w : w;
+    if (line && ctx.measureText(t).width > maxW) { lines.push(line); line = w; }
+    else line = t;
+  });
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * بيرسم سند القبض كامل كصورة — اللوجو والمبلغ رقمًا وكتابةً والتوقيع كلهم في ورقة واحدة.
+ * بيتعمل على موبايل المندوب لحظة الحفظ، فبيشتغل من غير نت والعربي بيطلع سليم.
+ * o = { voucher, date, time, customer, amount, method, reference, notes, rep, sigCanvas, company, currency }
+ */
+function composeReceipt(o) {
+  return new Promise(resolve => {
+    const W = 780, H = 1090, M = 46, RIGHT = W - M, INNER = W - M * 2;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    const F = (sz, bold) => (bold ? 'bold ' : '') + sz + 'px Tahoma, "Segoe UI", "Noto Naskh Arabic", system-ui, sans-serif';
+
+    const paint = (logoImg) => {
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+      ctx.direction = 'rtl'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+
+      // برواز
+      ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 3;
+      ctx.strokeRect(14, 14, W - 28, H - 28);
+
+      let y = M + 12;
+      // اللوجو واسم الشركة
+      if (logoImg) {
+        const lh = 74, lw = Math.min(230, logoImg.width * (lh / logoImg.height));
+        ctx.drawImage(logoImg, (W - lw) / 2, y, lw, lh);
+        y += lh + 12;
+      }
+      ctx.textAlign = 'center'; ctx.fillStyle = '#1e3a5f';
+      ctx.font = F(30, true);
+      ctx.fillText(o.company || 'شركة روافد', W / 2, y + 26); y += 44;
+
+      // عنوان السند
+      ctx.fillStyle = '#1e3a5f';
+      ctx.fillRect(W / 2 - 108, y, 216, 46);
+      ctx.fillStyle = '#ffffff'; ctx.font = F(26, true);
+      ctx.fillText('سند قبض', W / 2, y + 32);
+      y += 76;
+
+      ctx.textAlign = 'right';
+      const line = () => { ctx.strokeStyle = '#c8d0dc'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(RIGHT, y); ctx.stroke(); y += 26; };
+
+      // سطر بعنوان وقيمة — لو النص أطول من المساحة بيتقص بـ«…» عشان القص يبان مش يختفي
+      const field = (label, value, size, maxLines) => {
+        const max = maxLines || 3;
+        ctx.font = F(size || 20); ctx.fillStyle = '#5d6a7a';
+        ctx.fillText(label, RIGHT, y);
+        const lw = ctx.measureText(label).width;
+        ctx.font = F(size || 20, true); ctx.fillStyle = '#101d2b';
+        let lines = wrapLines(ctx, value, INNER - lw - 10);
+        if (lines.length > max) {
+          lines = lines.slice(0, max);
+          lines[max - 1] = lines[max - 1] + ' …';
+        }
+        ctx.fillText(lines[0] || '—', RIGHT - lw - 8, y);
+        y += 32;
+        lines.slice(1).forEach(l => { ctx.fillText(l, RIGHT, y); y += 30; });
+      };
+
+      // رقم السند والتاريخ في سطر واحد
+      ctx.font = F(20); ctx.fillStyle = '#5d6a7a';
+      ctx.fillText('رقم السند:', RIGHT, y);
+      const w1 = ctx.measureText('رقم السند:').width;
+      ctx.font = F(23, true); ctx.fillStyle = '#a52626';
+      ctx.fillText(String(o.voucher || '—'), RIGHT - w1 - 8, y);
+      ctx.textAlign = 'left'; ctx.font = F(19); ctx.fillStyle = '#101d2b';
+      ctx.fillText(String(o.date || '') + '   ' + String(o.time || ''), M, y);
+      ctx.textAlign = 'right';
+      y += 22; line();
+
+      field('استلمنا من السيد/ة:', o.customer || '—');
+      field('مبلغ وقدره:', money(o.amount) + ' ' + (o.currency || 'ر.س'), 24);
+
+      // المبلغ كتابةً في إطار
+      ctx.font = F(20, true);
+      const words = wrapLines(ctx, amountInWords(o.amount), INNER - 26);
+      const boxH = 20 + words.length * 30;
+      ctx.fillStyle = '#f4f6fa'; ctx.fillRect(M, y - 4, INNER, boxH);
+      ctx.strokeStyle = '#1e3a5f'; ctx.lineWidth = 1.5; ctx.strokeRect(M, y - 4, INNER, boxH);
+      ctx.fillStyle = '#101d2b';
+      words.forEach((l, i) => ctx.fillText(l, RIGHT - 13, y + 24 + i * 30));
+      y += boxH + 22;
+
+      field('طريقة الدفع:', o.method || '—');
+      if (o.reference) field('رقم المرجع:', o.reference, 20, 2);
+      if (o.notes) field('وذلك عن:', o.notes, 20, 4);
+      line();
+
+      // المندوب والتوقيع
+      const sigTop = y + 6;
+      ctx.font = F(19); ctx.fillStyle = '#5d6a7a';
+      ctx.fillText('المستلم (المندوب)', RIGHT, sigTop + 16);
+      ctx.font = F(21, true); ctx.fillStyle = '#101d2b';
+      ctx.fillText(o.rep || '', RIGHT, sigTop + 50);
+
+      ctx.textAlign = 'center'; ctx.font = F(19); ctx.fillStyle = '#5d6a7a';
+      const sx = M + INNER * 0.28;
+      ctx.fillText('توقيع العميل', sx, sigTop + 16);
+      if (o.sigCanvas) {
+        const sw = 260, sh = Math.round(sw * (o.sigCanvas.height / o.sigCanvas.width));
+        ctx.drawImage(o.sigCanvas, sx - sw / 2, sigTop + 26, sw, sh);
+        ctx.strokeStyle = '#101d2b'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(sx - sw / 2, sigTop + 30 + sh); ctx.lineTo(sx + sw / 2, sigTop + 30 + sh); ctx.stroke();
+      }
+
+      // التذييل
+      ctx.font = F(15); ctx.fillStyle = '#8a94a3';
+      ctx.fillText('صادر إلكترونيًا من نظام ' + (o.company || 'روافد') + ' — ' + (o.date || ''), W / 2, H - 40);
+
+      resolve(cv.toDataURL('image/jpeg', 0.85));
+    };
+
+    const src = logoSrc();
+    if (!src) return paint(null);
+    const img = new Image();
+    img.onload = () => paint(img);
+    img.onerror = () => paint(null);
+    img.src = src;
+  });
+}
+
 /** بيصغّر الصورة قبل الرفع عشان تبقى خفيفة على النت */
 function shrinkImage(file, maxSide, quality) {
   return new Promise((resolve, reject) => {
@@ -3545,7 +4214,7 @@ A.orderSave = async (custId) => {
   closeModal();
   try { const r = await api('saveOrder', payload); toast(r.message, 'ok'); }
   catch (e) {
-    if (e.offline) { qpush('saveOrder', payload); toast('📴 الطلب اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
+    if (e.offline) { if (qpush('saveOrder', payload)) toast('📴 الطلب اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -3557,8 +4226,11 @@ A.collectForm = (custId) => {
   openModal(`
     <h2>💵 سند قبض: ${esc(c.name)}</h2>
     ${Number(c.overdue) > 0 ? '<p class="modal-sub">المتأخر عليه: <b>' + moneyC(c.overdue) + '</b></p>' : ''}
+    <label>رقم سند القبض (من الدفتر) *</label>
+    <input id="col-voucher" type="text" inputmode="numeric" placeholder="الرقم المطبوع على ورقة السند">
     <label>المبلغ (${esc(cur())}) *</label>
-    <input id="col-amount" type="text" inputmode="decimal" placeholder="0">
+    <input id="col-amount" type="text" inputmode="decimal" placeholder="0" oninput="A.colWords(this.value)">
+    <div id="col-words" class="muted"></div>
     <label>طريقة الدفع</label>
     <select id="col-method" onchange="A.colMethod(this.value)">
       ${payMethods().map(m => '<option>' + esc(m) + '</option>').join('')}
@@ -3568,7 +4240,7 @@ A.collectForm = (custId) => {
       <label id="col-ref-label">رقم المرجع</label><input id="col-ref">
     </div>
     <label>ملاحظات</label><input id="col-notes">
-    <label>توقيع العميل (اختياري)</label>
+    <label id="col-sig-label">توقيع العميل *</label>
     ${signaturePad('col-sig')}
     <p class="muted mt">تحصيل ${esc(custodyMethods().join(' و'))} بيتسجل في عهدتك لحد ما تورّده للإدارة.</p>
     <div class="modal-actions">
@@ -3582,11 +4254,22 @@ function bankMethodsList() {
 }
 function isBankMethod(m) { return bankMethodsList().indexOf(String(m).trim()) > -1; }
 
+/** المبلغ بالحروف بيتكتب تحت الخانة وانت بتكتب — عشان المندوب يراجع قبل ما العميل يوقّع */
+A.colWords = (v) => {
+  const box = document.getElementById('col-words');
+  if (!box) return;
+  const n = Number(normDigits(v));
+  box.textContent = n > 0 ? amountInWords(n) : '';
+};
+
 A.colMethod = (v) => {
   const custody = isCustodyMethod(v);
   document.getElementById('col-ref-box').style.display = custody ? 'none' : 'block';
   const lbl = document.getElementById('col-ref-label');
   if (lbl) lbl.textContent = v === 'شيك' ? 'رقم الشيك' : v === 'مدى' ? 'رقم العملية / آخر 4 أرقام' : 'رقم العملية';
+  // التوقيع إجباري على الكاش (اللي بيدخل العهدة) — الباقي ليه إثبات من البنك
+  const sigLbl = document.getElementById('col-sig-label');
+  if (sigLbl) sigLbl.innerHTML = custody ? 'توقيع العميل *' : 'توقيع العميل <span class="muted">(اختياري)</span>';
   const hint = document.getElementById('col-hint');
   if (!hint) return;
   if (isBankMethod(v)) {
@@ -3599,27 +4282,44 @@ A.colMethod = (v) => {
   }
 };
 A.collectSave = async (custId) => {
+  const c = custById(custId) || {};
+  const voucher = normDigits(($('#col-voucher') || {}).value || '').trim();
   const amount = normDigits($('#col-amount').value);
+  const method = $('#col-method').value;
+  if (!voucher) return toast('اكتب رقم سند القبض من الدفتر', 'err');
   if (!(Number(amount) > 0)) return toast('اكتب المبلغ', 'err');
-  const payload = {
-    customer_id: custId, amount: amount, method: $('#col-method').value,
-    reference: ($('#col-ref') || {}).value || '', notes: $('#col-notes').value.trim(),
-    date: new Date().toISOString().slice(0, 10)
-  };
+
   const cv = document.getElementById('col-sig');
-  const sig = (cv && !cv._isEmpty()) ? cv.toDataURL('image/png') : null;
+  const signed = cv && !cv._isEmpty();
+  if (isCustodyMethod(method) && !signed) return toast('لازم العميل يوقّع على السند', 'err');
+
+  const now = new Date();
+  const payload = {
+    customer_id: custId, voucher: voucher, amount: amount, method: method,
+    reference: ($('#col-ref') || {}).value || '', notes: $('#col-notes').value.trim(),
+    date: todayISO(now)
+  };
+  // السند الكامل بيتبعت مع الطلب نفسه — عشان ميضيعش لو النت قطع بعد الحفظ
+  try {
+    payload.receipt = await composeReceipt({
+      voucher: voucher, date: payload.date,
+      time: String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0'),
+      customer: c.name, amount: Number(amount), method: method,
+      reference: payload.reference, notes: payload.notes,
+      rep: (S.user && S.user.name) || '', sigCanvas: signed ? cv : null,
+      company: companyName(), currency: cur()
+    });
+  } catch (e) { /* لو الرسم فشل لأي سبب، السند بيتسجل من غير الصورة */ }
+
   closeModal();
   try {
     const r = await api('saveCollection', payload);
     toast(r.message, 'ok');
-    if (sig && r.id) {
-      try { await uploadAttachment('collection', r.id, 'signature', sig); toast('✍️ التوقيع اتحفظ', 'ok'); }
-      catch (e) { toast('التوقيع مترفعش: ' + (e.msg || ''), 'err'); }
-    }
     refresh(true);
   } catch (e) {
-    if (e.offline) { qpush('saveCollection', payload); toast('📴 السند اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
-    else toast(e.msg || 'خطأ', 'err');
+    if (e.offline) {
+      if (qpush('saveCollection', payload)) toast('📴 السند اتحفظ محليًا وهيترفع لما النت يرجع', 'ok');
+    } else toast(e.msg || 'خطأ', 'err');
   }
 };
 
@@ -3648,7 +4348,11 @@ function renderCashModal() {
       <div class="stat-line"><span>− مصروفات (${c.expensesCount})</span><b class="neg">${money(c.expenses)}</b></div>
       <div class="stat-line"><span><b>= اللي معاك</b></span><b>${money(c.balance)} ${esc(r.currency)}</b></div>
     </div>
-    ${r.canSpend ? `<button class="btn amber full" onclick="A.expenseForm()">➖ صرف من العهدة</button><div class="mt"></div>` : ''}
+    <div class="flex">
+      ${r.canSpend ? `<button class="btn amber" onclick="A.expenseForm()">➖ صرف من العهدة</button>` : ''}
+      <button class="btn ghost" onclick="A.myExpenses()">🧾 كل مصروفاتي</button>
+    </div>
+    <div class="mt"></div>
     ${c.moves.length ? `<div class="section-title"><span>حركة العهدة</span></div>
       <div class="table-wrap"><table>
         <tr><th>التاريخ</th><th>البيان</th><th>وارد</th><th>منصرف</th></tr>
@@ -3667,28 +4371,61 @@ A.expenseForm = () => {
   openModal(`
     <h2>➖ صرف من العهدة</h2>
     <p class="modal-sub">اللي معاك دلوقتي: <b>${money(r.cash.balance)} ${esc(r.currency)}</b></p>
+    <label>رقم سند الصرف *</label>
+    <input id="exp-voucher" type="text" inputmode="numeric" placeholder="الرقم المكتوب على السند">
     <label>نوع المصروف *</label>
     <select id="exp-cat">${r.categories.map(c => '<option>' + esc(c) + '</option>').join('')}</select>
     <label>المبلغ (${esc(r.currency)}) *</label>
     <input id="exp-amount" type="text" inputmode="decimal" placeholder="0">
     <label>البيان *</label>
     <input id="exp-desc" placeholder="مثال: بنزين السيارة من محطة كذا">
-    <p class="muted mt">المصروف بينزل من عهدتك على طول، والإدارة بتشوفه في كشفك.</p>
+    <label>تاريخ الصرف *</label>
+    <input id="exp-date" type="date" value="${todayISO()}" max="${todayISO()}">
+    <p class="muted mt">اكتب رقم السند زي ما هو مكتوب على الورقة — الإدارة بتراجع بيه وبترحّله للحسابات.</p>
     <div class="modal-actions">
       <button class="btn amber" onclick="A.expenseSave()">تسجيل المصروف ✔</button>
       <button class="btn outline" onclick="A.myCash()">رجوع</button>
     </div>`);
 };
 
+/** سجل مصروفات المندوب من البداية — بيشوف بتوعه هو بس */
+A.myExpenses = async () => {
+  toast('⏳ بجيب مصروفاتك...');
+  try {
+    const r = await api('expenseReport', { includeArchive: true });
+    openModal(`
+      <h2>🧾 كل مصروفاتك</h2>
+      <p class="modal-sub">${r.count} حركة بإجمالي <b>${money(r.total)} ${esc(r.currency)}</b></p>
+      ${r.byCategory.length ? '<div class="card">' + r.byCategory.map(c =>
+        `<div class="stat-line"><span>${esc(c.name)}</span><b>${money(c.total)}</b></div>`).join('') + '</div>' : ''}
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>سند</th><th>النوع</th><th>المبلغ</th><th>البيان</th><th>الحالة</th></tr>
+        ${r.rows.map(e => `<tr>
+          <td>${esc(e.date)}</td><td>${esc(e.voucher || '—')}</td><td>${esc(e.category)}</td>
+          <td><b class="neg">${money(e.amount)}</b></td>
+          <td>${esc(e.description || '')}</td>
+          <td>${e.settled ? '<span class="badge cool">اتورد</span>' : '<span class="badge warm">في عهدتك</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="muted">لسه مصرفتش حاجة</td></tr>'}
+      </table></div>
+      <div class="modal-actions">
+        <button class="btn outline" onclick="A.myCash()">رجوع للعهدة</button>
+        <button class="btn outline" onclick="A.closeModal()">إغلاق</button>
+      </div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
 A.expenseSave = async () => {
   const payload = {
+    voucher: normDigits($('#exp-voucher').value).trim(),
     category: $('#exp-cat').value,
     amount: normDigits($('#exp-amount').value),
     description: $('#exp-desc').value.trim(),
-    date: new Date().toISOString().slice(0, 10)
+    date: $('#exp-date').value || todayISO()
   };
+  if (!payload.voucher) return toast('اكتب رقم سند الصرف', 'err');
   if (!(Number(payload.amount) > 0)) return toast('اكتب المبلغ', 'err');
-  if (!payload.description) return toast('اكتب بيان المصروف', 'err');
+  if (payload.description.length < 3) return toast('اكتب بيان المصروف', 'err');
+  if (payload.date > todayISO()) return toast('مينفعش تاريخ في المستقبل', 'err');
   if (Number(payload.amount) > A._cash.cash.balance) return toast('المبلغ أكبر من العهدة اللي معاك', 'err');
   closeModal();
   try { const r = await api('saveExpense', payload); toast(r.message, 'ok'); A.myCash(); }
