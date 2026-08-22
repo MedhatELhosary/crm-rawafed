@@ -2493,7 +2493,8 @@ function adCustomers() {
         <td>${c.priority_score || 0}</td>
         <td style="white-space:nowrap"><button class="btn sm ghost" onclick="A.custForm('${c.id}')">تعديل</button>
           <button class="btn sm outline" onclick="A.statement('${c.id}')">📄</button>
-          <button class="btn sm outline" onclick="A.overdueDetails('${c.id}')" title="تفاصيل حساب المتأخرات">🔬</button></td>
+          <button class="btn sm outline" onclick="A.overdueDetails('${c.id}')" title="تفاصيل حساب المتأخرات">🔬</button>
+          <button class="btn sm outline" onclick="A.traceCustomer('${c.id}')" title="مصدر كل حركة في كشف حسابه">🔎</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش عملاء — ضيفهم يدوي أو استوردهم من قيود</td></tr>'}
     </table></div>
     ${list.length > 200 ? '<p class="muted mt">معروض أول 200 — استخدم البحث</p>' : ''}`;
@@ -2928,9 +2929,21 @@ A.statementRun = async (custId) => {
         <div class="stmt-footer">صادر من نظام ${esc(r.company)} — ${new Date().toISOString().slice(0, 10)}</div>
       </div>`;
 
+    // فحص ذاتي: إجمالي الكشف لازم يطابق رصيد العميل المخزّن.
+    // لو اختلفوا يبقى فيه مصدر بيتحسب في حتة ومش متحسب في التانية — وده اللي حصل مع الفواتير المسودة.
+    const mismatch = (r.fullTotal !== undefined && r.storedBalance !== undefined &&
+                      Math.abs(Number(r.fullTotal) - Number(r.storedBalance)) > 0.01);
     openModal(`
       <h2>📄 كشف حساب: ${esc(r.customer.name)}</h2>
       <p class="modal-sub">${esc(periodTxt)}</p>
+      ${r.drafts ? `<div class="card" style="border-right:4px solid var(--amber);padding:10px 12px">
+        <b>ℹ️ ${r.drafts} مستند مسودة في قيود</b>
+        <p class="muted" style="margin:4px 0 0">مش محسوبين في الكشف ولا في الرصيد — المسودة مش فاتورة لسه.
+        لو المفروض تتحسب، اعتمدها في قيود وزامن.</p></div>` : ''}
+      ${mismatch ? `<div class="card" style="border-right:4px solid var(--red);padding:10px 12px">
+        <b>🔴 إجمالي الكشف مش مطابق لرصيد العميل</b>
+        <p class="muted" style="margin:4px 0 0">الكشف: ${money(r.fullTotal)} · الرصيد المسجل: ${money(r.storedBalance)}
+        — شغّل مزامنة، ولو الفرق فضل شغّل «🧪 فحص سلامة كشوف الحساب» من الإعدادات.</p></div>` : ''}
       <div class="stmt-preview">${stmtHtml}</div>
       <div class="modal-actions">
         <button class="btn" onclick="A.printStatement()">🖨️ حفظ PDF / طباعة</button>
@@ -3090,6 +3103,8 @@ function adSettings() {
       </div>
       <div class="stat-line mt"><span>حالة آخر مزامنة</span><b id="sync-status">${esc(s.SYNC_STATUS || 'لسه متعملتش')}</b></div>
       <button class="btn amber full mt" onclick="A.diagnose()">🔍 فحص البيانات — ليه الأرقام مش ظاهرة؟</button>
+      <button class="btn full mt" onclick="A.auditStatements()">🧪 فحص سلامة كشوف الحساب</button>
+      <label class="mt"><input type="checkbox" id="s-sync-del" ${String(s.SYNC_DELETE_MISSING || 'TRUE').toUpperCase() !== 'FALSE' ? 'checked' : ''} style="width:auto"> المستند اللي يتمسح من قيود يتمسح من عندنا كمان</label>
       <p class="muted mt">المزامنة بتشتغل لوحدها كل ساعة: فواتير + مرتجعات + تحصيلات، وبتحدث أرصدة العملاء وأولوياتهم.</p>
     </div>
     <div class="card">
@@ -3283,7 +3298,8 @@ A.saveSettings = async () => {
     CREDIT_LIMIT_DEFAULT: $('#s-credit-default').value,
     CREDIT_BLOCK: $('#s-credit-block').checked ? 'TRUE' : 'FALSE',
     CREDIT_BLOCK_OVERDUE: $('#s-credit-overdue').checked ? 'TRUE' : 'FALSE',
-    MAX_VISIT_PHOTOS: $('#s-max-photos').value
+    MAX_VISIT_PHOTOS: $('#s-max-photos').value,
+    SYNC_DELETE_MISSING: $('#s-sync-del').checked ? 'TRUE' : 'FALSE'
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
@@ -3645,6 +3661,91 @@ A.overdueDetails = async (custId) => {
 };
 
 // ----- فحص البيانات -----
+// ----- فحص سلامة كشوف الحساب -----
+A.auditStatements = async () => {
+  toast('⏳ بيقارن بيانتنا بقيود — استنى شوية...');
+  try {
+    const r = await api('statementAudit', { checkQoyod: true });
+    A._audit = r;
+    renderAudit(r);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+function renderAudit(r) {
+  const bad = (r.issues || []).filter(i => i.severity === 'خطير');
+  const mid = (r.issues || []).filter(i => i.severity !== 'خطير');
+  const card = i => `<div class="card" style="border-right:4px solid ${i.severity === 'خطير' ? 'var(--red)' : 'var(--amber)'}">
+      <b>${i.severity === 'خطير' ? '🔴' : '🟡'} ${esc(i.kind)}</b>
+      <p style="margin:6px 0">${esc(i.detail)}</p>
+      ${i.sample && i.sample.length ? '<div class="muted" style="font-size:12px">' +
+        i.sample.map(x => esc(String(x))).join('<br>') + '</div>' : ''}
+      ${i.fix ? '<p class="muted" style="margin-top:6px">✅ الحل: ' + esc(i.fix) + '</p>' : ''}
+    </div>`;
+  const ph = (r.phantoms || []);
+  openModal(`
+    <h2>🧪 فحص سلامة كشوف الحساب</h2>
+    <p class="modal-sub">${r.customersCount} عميل · ${Object.keys(r.stats || {}).map(k => k + ': ' + r.stats[k]).join(' · ')}</p>
+    ${r.qoyodError ? '<div class="card" style="border-right:4px solid var(--amber)"><b>⚠️ المقارنة بقيود ماتمتش</b><p class="muted">' + esc(r.qoyodError) + '</p></div>' : ''}
+    ${!r.issues.length ? '<div class="card" style="border-right:4px solid var(--green)"><b>✅ كل حاجة سليمة</b><p class="muted">مفيش أي مشاكل في مصادر كشوف الحساب.</p></div>' : ''}
+    ${bad.map(card).join('')}
+    ${mid.map(card).join('')}
+    ${ph.length ? `<div class="section-title"><span>المستندات الشبح (موجودة عندنا ومش في قيود)</span></div>
+      ${ph.map(p => `<div class="table-wrap"><table>
+        <tr><th colspan="5">${esc(p.label)} — ${p.count}</th></tr>
+        <tr><th>الرقم</th><th>كود قيود</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th></tr>
+        ${p.rows.map(x => `<tr><td>${esc(x.number || '—')}</td><td>${esc(String(x.qoyod_id))}</td>
+          <td>${esc(x.date)}</td><td>${esc(x.customer)}</td><td><b>${money(x.amount)}</b></td></tr>`).join('')}
+      </table></div>`).join('')}
+      <button class="btn red full mt" onclick="A.purgePhantoms()">🗑️ امسح المستندات الشبح دي</button>` : ''}
+    ${(r.issues || []).some(i => /مكرر/.test(i.kind)) ?
+      '<button class="btn amber full mt" onclick="A.dedupeDocs()">🧹 شيل المستندات المكررة</button>' : ''}
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+}
+
+A.purgePhantoms = async () => {
+  if (!confirm('هيتمسح من عندنا كل مستند مش موجود في قيود. النسخة الاحتياطية اليومية موجودة. تمام؟')) return;
+  closeModal();
+  toast('⏳ بيمسح...');
+  try { const r = await api('purgePhantoms', { confirm: 'مسح' }); toast(r.message, 'ok'); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.dedupeDocs = async () => {
+  closeModal();
+  toast('⏳ بيشيل المكرر...');
+  try { const r = await api('dedupeDocs', { confirm: 'مسح' }); toast(r.message, 'ok'); refresh(true); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+/** تتبع حركات عميل واحد — كل حركة ومصدرها */
+A.traceCustomer = async (custId) => {
+  toast('⏳ بيتتبع حركات العميل...');
+  try {
+    const r = await api('statementAudit', { customer_id: custId });
+    const c = r.customer;
+    if (!c) return toast('العميل مش موجود', 'err');
+    openModal(`
+      <h2>🔎 مصدر حركات: ${esc(c.name)}</h2>
+      <p class="modal-sub">كود قيود: <b>${esc(c.qoyod_id || 'مفيش')}</b></p>
+      ${!c.qoyod_id ? '<div class="card" style="border-right:4px solid var(--amber)"><b>العميل ده مش مربوط بقيود</b><p class="muted">كشف حسابه مش هيعرض غير القيود اليدوية.</p></div>' : ''}
+      ${c.sharesQoyodIdWith.length ? `<div class="card" style="border-right:4px solid var(--red)">
+        <b>🔴 نفس كود قيود متسجل على عملاء تانيين</b>
+        <p>${c.sharesQoyodIdWith.map(esc).join('، ')}</p>
+        <p class="muted">عشان كده بيظهروا في كشف بعض. صحّح الأكواد من شاشة العملاء.</p></div>` : ''}
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>النوع</th><th>الرقم</th><th>كود قيود</th><th>المبلغ</th><th>الاسم على المستند</th></tr>
+        ${c.trace.map(t => `<tr>
+          <td>${esc(t.date)}</td><td>${esc(t.label)}</td>
+          <td>${esc(t.number || '—')}</td><td>${esc(String(t.qoyod_id || '—'))}</td>
+          <td><b>${money(t.amount)}</b></td>
+          <td>${esc(t.customer_name_on_doc || '—')}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="muted">مفيش حركات</td></tr>'}
+      </table></div>
+      <p class="muted mt">لو فيه حركة مش عارفها: خد كود قيود بتاعها ودوّر عليه في قيود.
+      لو ملقتهاش هناك يبقى مستند شبح — شغّل فحص سلامة كشوف الحساب من الإعدادات.</p>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
 A.diagnose = async () => {
   toast('⏳ بفحص البيانات...');
   try {
