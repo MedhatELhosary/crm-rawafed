@@ -667,12 +667,14 @@ A.saveLocAndCheckin = async (custId, saveLoc) => {
   closeModal();
   const c = custById(custId);
   const pos = A._pendingPos;
+  let added = false;
   if (saveLoc && pos) {
     c.lat = pos.lat; c.lng = pos.lng; c.location_source = 'GPS من الموقع';
+    added = true;
     try { await api('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
     catch (e) { if (e.offline) qpush('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); }
   }
-  await doCheckin(c, pos);
+  await doCheckin(c, pos, added);
 };
 
 A.pickLocForCustomer = (custId, thenCheckin) => {
@@ -681,15 +683,17 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
     c.lat = ll.lat; c.lng = ll.lng; c.location_source = 'تحديد يدوي على الخريطة';
     try { await api('setCustomerLocation', { customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
     catch (e) { if (e.offline) { qpush('setCustomerLocation', { customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' }); toast('اتحفظ محليًا وهيترفع لما النت يرجع'); } else toast(e.msg || 'خطأ', 'err'); }
-    if (thenCheckin) await doCheckin(c, A._pendingPos);
+    if (thenCheckin) await doCheckin(c, A._pendingPos, true);
     else render();
   });
 };
 
-async function doCheckin(c, pos) {
+/** locationAdded = اتحدد لوكيشن العميل كجزء من الزيارة دي — بيتسجل على الزيارة للتقرير */
+async function doCheckin(c, pos, locationAdded) {
   const nowTime = new Date().toTimeString().slice(0, 5);
   if (pos) pushTrackPoint(pos.lat, pos.lng, pos.acc, 'وصول: ' + c.name);
-  const payload = { customer_id: c.id, lat: pos ? pos.lat : '', lng: pos ? pos.lng : '' };
+  const payload = { customer_id: c.id, lat: pos ? pos.lat : '', lng: pos ? pos.lng : '',
+                    location_added: !!locationAdded };
   try {
     const res = await api('checkin', payload);
     S.liveVisit = { visit_id: res.visit_id, customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: res.distance_m, inRange: res.inRange, local: false };
@@ -3041,19 +3045,130 @@ A.saveTarget = async (repId, month) => {
 // ----- التقارير -----
 function adReports() {
   const reps = (S.data.users || []).filter(u => u.role === 'rep');
+  const regions = S.data.regions || [];
+  const r = S.vrep;
+  const today = todayISO();
+  const monthStart = today.slice(0, 8) + '01';
+  const pct = (n, t) => t ? Math.round(n / t * 100) : 0;
   return `
     <div class="card">
       <h3>📄 تقرير الزيارات</h3>
       <div class="grid2">
-        <div><label>من</label><input type="date" id="rp-from"></div>
-        <div><label>إلى</label><input type="date" id="rp-to"></div>
+        <div><label>من تاريخ</label><input type="date" id="rp-from" value="${esc((r && r.from) || monthStart)}"></div>
+        <div><label>إلى تاريخ</label><input type="date" id="rp-to" value="${esc((r && r.to) || today)}"></div>
       </div>
-      <label>المندوب</label>
-      <select id="rp-rep"><option value="">الكل</option>${reps.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
+      <div class="grid2">
+        <div><label>المندوب</label>
+          <select id="rp-rep"><option value="">كل المناديب</option>
+            ${reps.map(u => `<option value="${esc(u.id)}" ${S.vrepRep === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+          </select></div>
+        <div><label>المنطقة</label>
+          <select id="rp-region"><option value="">كل المناطق</option>
+            ${regions.map(g => `<option value="${esc(g.id)}" ${S.vrepRegion === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+          </select></div>
+      </div>
+      <div class="grid2">
+        <div><label>الحالة</label>
+          <select id="rp-status"><option value="">كل الحالات</option>
+            ${((r && r.statuses) || ['تمت', 'العميل مقفول', 'مؤجلة', 'جارية']).map(x =>
+              `<option ${S.vrepStatus === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}
+          </select></div>
+        <div><label>النتيجة</label>
+          <select id="rp-outcome"><option value="">كل النتائج</option>
+            ${((r && r.outcomes) || []).filter(x => x !== '(مش محدد)').map(x =>
+              `<option ${S.vrepOutcome === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}
+          </select></div>
+      </div>
+      <label>بحث في التقارير (اسم عميل، مندوب، كلمة في التقرير)</label>
+      <input id="rp-q" value="${esc(S.vrepQ || '')}" placeholder="مثال: شكوى">
+      <label><input type="checkbox" id="rp-arch" ${S.vrepArch ? 'checked' : ''} style="width:auto"> ضم الزيارات المؤرشفة (أقدم من سنة)</label>
       <div class="flex mt">
-        <button class="btn" onclick="A.exportVisits()">⬇️ تنزيل Excel (زيارات)</button>
+        <button class="btn" onclick="A.loadVisitsReport()">عرض التقرير</button>
+        <button class="btn ghost" onclick="A.quickVrep('today')">النهارده</button>
+        <button class="btn ghost" onclick="A.quickVrep('week')">آخر 7 أيام</button>
+        <button class="btn ghost" onclick="A.quickVrep('month')">الشهر ده</button>
       </div>
     </div>
+
+    ${!r ? '<div class="empty"><div class="big">📄</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">${r.summary.visits}</div><div class="lbl">زيارة</div></div>
+        <div class="kpi"><div class="num">${r.summary.customers}</div><div class="lbl">عميل اتزار</div></div>
+        <div class="kpi"><div class="num" style="color:var(--green)">${pct(r.summary.done, r.summary.visits)}%</div>
+          <div class="lbl">زيارات تمت (${r.summary.done})</div></div>
+        <div class="kpi"><div class="num">${r.summary.avgDuration} د</div><div class="lbl">متوسط مدة الزيارة</div></div>
+        <div class="kpi"><div class="num" style="color:${r.summary.locationsAdded ? 'var(--green)' : 'var(--muted)'}">${r.summary.locationsAdded}</div>
+          <div class="lbl">لوكيشن اتحدد في زيارة</div></div>
+        <div class="kpi"><div class="num" style="color:${r.summary.outOfRange ? 'var(--red)' : 'var(--green)'}">${r.summary.outOfRange}</div>
+          <div class="lbl">زيارة بره النطاق (${r.geofence}م)</div></div>
+        <div class="kpi"><div class="num" style="color:${r.summary.noReport ? 'var(--amber)' : 'var(--green)'}">${r.summary.noReport}</div>
+          <div class="lbl">زيارة من غير تقرير</div></div>
+        <div class="kpi"><div class="num" style="color:${r.summary.customersWithoutLocation ? 'var(--amber)' : 'var(--green)'}">${r.summary.customersWithoutLocation}</div>
+          <div class="lbl">عميل لسه من غير لوكيشن</div></div>
+      </div>
+
+      ${r.byRep.length ? `<div class="section-title"><span>أداء كل مندوب</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>المندوب</th><th>زيارات</th><th>عملاء</th><th>تمت</th><th>متوسط المدة</th>
+              <th>لوكيشن حدده</th><th>بره النطاق</th><th>من غير تقرير</th></tr>
+          ${r.byRep.map(x => `<tr>
+            <td><b>${esc(x.name)}</b></td>
+            <td>${x.visits}</td><td>${x.customers}</td>
+            <td>${x.done} <span class="muted">(${x.doneRate}%)</span></td>
+            <td>${x.avgDuration} د</td>
+            <td>${x.locAdded ? '<span class="badge cool">' + x.locAdded + '</span>' : '—'}</td>
+            <td>${x.outOfRange ? '<span class="badge hot">' + x.outOfRange + '</span>' : '—'}</td>
+            <td>${x.noReport ? '<span class="badge warm">' + x.noReport + '</span>' : '—'}</td>
+          </tr>`).join('')}
+        </table></div>` : ''}
+
+      ${r.byOutcome.length ? `<div class="section-title"><span>نتائج الزيارات</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>النتيجة</th><th>العدد</th><th>النسبة</th></tr>
+          ${r.byOutcome.map(x => `<tr><td><span class="badge info">${esc(x.name)}</span></td>
+            <td><b>${x.count}</b></td><td>${pct(x.count, r.summary.visits)}%</td></tr>`).join('')}
+        </table></div>` : ''}
+
+      ${r.summary.customersWithoutLocation ? `<div class="card" style="border-right:4px solid var(--amber)">
+        <b>⚠️ ${r.summary.customersWithoutLocation} عميل لسه من غير لوكيشن</b>
+        <p class="muted">المناديب مش هيعرفوا يتأكدوا من وصولهم عندهم. خلي المندوب يحدد اللوكيشن أول زيارة جاية.</p>
+        <div class="muted" style="font-size:12px">${r.customersWithoutLocation.map(c =>
+          esc(c.name) + ' <span style="opacity:.6">(' + esc(c.region) + ')</span>').join(' · ')}
+          ${r.summary.customersWithoutLocation > 30 ? ' … وغيرهم' : ''}</div>
+      </div>` : ''}
+
+      <div class="section-title"><span>تفاصيل الزيارات (${r.rows.length}${r.truncated ? ' من ' + r.summary.visits : ''})</span>
+        <button class="btn sm ghost" onclick="A.exportVisitsReport()">⬇️ تنزيل Excel</button></div>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>الوقت</th><th>المدة</th><th>المندوب</th><th>العميل</th><th>المنطقة</th>
+            <th>الحالة</th><th>النتيجة</th><th>التقرير</th><th>المسافة</th><th>اللوكيشن</th><th>المتابعة الجاية</th><th></th></tr>
+        ${r.rows.map(v => `<tr>
+          <td>${esc(v.date)}</td>
+          <td style="white-space:nowrap">${esc(v.checkin || '—')}${v.checkout ? ' ← ' + esc(v.checkout) : ''}</td>
+          <td>${v.duration !== '' ? v.duration + ' د' : '—'}</td>
+          <td>${esc(v.rep_name)}</td>
+          <td><b>${esc(v.customer_name)}</b></td>
+          <td>${esc(v.region)}</td>
+          <td>${v.status === 'تمت' ? '<span class="badge cool">تمت</span>'
+              : v.status === 'جارية' ? '<span class="badge warm">جارية</span>'
+              : '<span class="badge gray">' + esc(v.status || '—') + '</span>'}</td>
+          <td>${v.outcome ? '<span class="badge info">' + esc(v.outcome) + '</span>' : '—'}</td>
+          <td style="max-width:280px">${esc(v.report || '') || '<span class="muted">مفيش تقرير</span>'}</td>
+          <td>${v.distance_m === null ? '<span class="muted">—</span>'
+              : v.outOfRange ? '<span class="badge hot">' + v.distance_m + ' م</span>'
+              : '<span class="badge cool">' + v.distance_m + ' م</span>'}</td>
+          <td>${v.locationAdded ? '<span class="badge cool">📍 حدده هنا</span>'
+              : v.custHasLocation ? '<span class="muted" style="font-size:11px">موجود' + (v.custLocationSetBy ? '<br>' + esc(v.custLocationSetBy) : '') + '</span>'
+              : '<span class="badge hot">مفيش لوكيشن</span>'}</td>
+          <td>${v.next_action ? esc(v.next_action) + (v.next_action_date ? '<div class="muted" style="font-size:11px">' + esc(v.next_action_date) + '</div>' : '') : '—'}</td>
+          <td style="white-space:nowrap">
+            ${v.lat ? '<a class="btn sm outline" target="_blank" href="https://www.google.com/maps?q=' + esc(v.lat) + ',' + esc(v.lng) + '">🧭</a>' : ''}
+            ${v.photos ? attachLinks({ photos: v.photoUrls.join(',') }) : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="13" class="muted">مفيش زيارات في الفترة دي</td></tr>'}
+      </table></div>
+      ${r.truncated ? '<p class="muted">معروض أول 800 زيارة — ضيّق الفترة أو نزّل الملف للتفاصيل الكاملة.</p>' : ''}
+    `}
     <div class="card">
       <h3>💰 تقارير المالية (من قيود)</h3>
       <div class="flex">
@@ -3065,6 +3180,49 @@ function adReports() {
       <p class="muted mt">الملفات بتنزل CSV وبتتفتح على Excel — وكل البيانات الكاملة موجودة برضه في شيت جوجل نفسه.</p>
     </div>`;
 }
+A.loadVisitsReport = async () => {
+  const payload = {
+    from: ($('#rp-from') || {}).value || '', to: ($('#rp-to') || {}).value || '',
+    rep_id: ($('#rp-rep') || {}).value || '', region_id: ($('#rp-region') || {}).value || '',
+    status: ($('#rp-status') || {}).value || '', outcome: ($('#rp-outcome') || {}).value || '',
+    q: ($('#rp-q') || {}).value || '', includeArchive: ($('#rp-arch') || {}).checked || false
+  };
+  S.vrepRep = payload.rep_id; S.vrepRegion = payload.region_id;
+  S.vrepStatus = payload.status; S.vrepOutcome = payload.outcome;
+  S.vrepQ = payload.q; S.vrepArch = payload.includeArchive;
+  toast('⏳ بجهز التقرير...');
+  try { S.vrep = await api('visitsReport', payload); render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.quickVrep = (kind) => {
+  const t = todayISO();
+  const d = new Date();
+  if (kind === 'week') d.setDate(d.getDate() - 6);
+  const from = kind === 'today' ? t : kind === 'week' ? todayISO(d) : t.slice(0, 8) + '01';
+  $('#rp-from').value = from;
+  $('#rp-to').value = t;
+  A.loadVisitsReport();
+};
+A.exportVisitsReport = () => {
+  const r = S.vrep;
+  if (!r) return;
+  const rows = (r.rows || []).map(v => ({
+    'التاريخ': v.date, 'وصول': v.checkin, 'انصراف': v.checkout, 'المدة (دقيقة)': v.duration,
+    'المندوب': v.rep_name, 'العميل': v.customer_name, 'المنطقة': v.region,
+    'الحالة': v.status, 'نوع الزيارة': v.visit_type, 'النتيجة': v.outcome,
+    'التقرير': v.report, 'الخطوة الجاية': v.next_action, 'تاريخ الخطوة الجاية': v.next_action_date,
+    'المسافة من العميل (م)': v.distance_m === null ? '' : v.distance_m,
+    'بره النطاق': v.outOfRange ? 'نعم' : 'لأ',
+    'إحداثيات الزيارة': v.lat ? v.lat + ',' + v.lng : '',
+    'حدد لوكيشن العميل في الزيارة دي': v.locationAdded ? 'نعم' : 'لأ',
+    'العميل عنده لوكيشن': v.custHasLocation ? 'نعم' : 'لأ',
+    'مصدر لوكيشن العميل': v.custLocationSource,
+    'اتحدد بواسطة': v.custLocationSetBy, 'اتحدد في': v.custLocationSetAt,
+    'عدد الصور': v.photos
+  }));
+  downloadCsv('تقرير_الزيارات_' + (r.from || 'من_البداية') + '_' + (r.to || 'للنهارده'), rows);
+};
+
 function downloadCsv(filename, rows) {
   if (!rows.length) return toast('مفيش بيانات للتصدير', 'err');
   const heads = Object.keys(rows[0]).filter(k => k !== '_row');
@@ -3080,14 +3238,6 @@ function downloadCsv(filename, rows) {
   a.download = filename + '.csv';
   a.click();
 }
-A.exportVisits = () => {
-  const from = $('#rp-from').value, to = $('#rp-to').value, rep = $('#rp-rep').value;
-  let list = (S.data.visits || []).slice();
-  if (from) list = list.filter(v => String(v.date).slice(0, 10) >= from);
-  if (to) list = list.filter(v => String(v.date).slice(0, 10) <= to);
-  if (rep) list = list.filter(v => String(v.rep_id) === String(rep));
-  downloadCsv('تقرير_الزيارات', list);
-};
 A.exportCsv = (key) => downloadCsv('تقرير_' + key, (S.data[key] || []).slice());
 
 // ----- الإعدادات -----
