@@ -9,14 +9,55 @@
 
 /* CRM روافد — التطبيق الرئيسي (مندوب + أدمن) */
 
+// ================== التخزين المحلي الآمن ==================
+/**
+ * قراءة قيمة محفوظة من غير ما ترمي خطأ أبدًا.
+ *
+ * مهم جدًا: القراءات دي بتحصل وقت تحميل الملف نفسه. لو أي قيمة اتخربت
+ * (مساحة الجهاز خلصت وسط الكتابة، أو المتصفح مسح جزء من البيانات)،
+ * JSON.parse كان بيرمي خطأ فالملف كله ميتنفذش والتطبيق يفضل شاشة بيضا
+ * — ومحصلش يفتح تاني أبدًا لأن نفس القيمة بتتقرا كل مرة.
+ */
+function readLS(key, fallback) {
+  let raw = null;
+  try { raw = localStorage.getItem(key); } catch (e) { return fallback; }
+  if (raw === null || raw === undefined || raw === '') return fallback;
+  try { return JSON.parse(raw); }
+  catch (e) {
+    try { localStorage.removeItem(key); } catch (e2) {}   // قيمة خربانة — نشيلها ونكمل
+    return fallback;
+  }
+}
+function readStr(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
+
+/** بيانات ممكن نجيبها تاني من السيرفر — دي أول حاجة نضحي بيها لو المساحة خلصت */
+const LS_DISPOSABLE = ['crm_boot', 'crm_products', 'crm_products_v', 'crm_logo', 'crm_logo_hash'];
+
+/**
+ * كتابة آمنة: لو المساحة خلصت بنفضّي البيانات اللي ليها بديل على السيرفر
+ * ونحاول تاني، وبنرجّع false لو برضه مافيش مكان (بدل ما نفشل في صمت).
+ */
+function writeLS(key, str) {
+  try { localStorage.setItem(key, str); return true; }
+  catch (e) {
+    let freed = false;
+    LS_DISPOSABLE.forEach(k => {
+      if (k === key) return;
+      try { if (localStorage.getItem(k) !== null) { localStorage.removeItem(k); freed = true; } } catch (e2) {}
+    });
+    if (freed) { try { localStorage.setItem(key, str); return true; } catch (e3) {} }
+    return false;
+  }
+}
+
 // ================== الحالة العامة ==================
 const S = {
-  token: localStorage.getItem('crm_token') || '',
-  user: JSON.parse(localStorage.getItem('crm_user') || 'null'),
-  device: localStorage.getItem('crm_device') || '',
-  data: JSON.parse(localStorage.getItem('crm_boot') || 'null'),
-  queue: JSON.parse(localStorage.getItem('crm_queue') || '[]'),
-  liveVisit: JSON.parse(localStorage.getItem('crm_live_visit') || 'null'),
+  token: readStr('crm_token'),
+  user: readLS('crm_user', null),
+  device: readStr('crm_device'),
+  data: readLS('crm_boot', null),
+  queue: readLS('crm_queue', []),
+  liveVisit: readLS('crm_live_visit', null),
   tab: 'today', adminTab: 'dash',
   custFilter: '', custDay: 'all', leadStage: 'all',
   myPos: null, loading: false
@@ -53,7 +94,7 @@ function money(n) {
 /** العملة من إعدادات النظام — بتتخزن محليًا عشان تظهر حتى قبل تحميل البيانات */
 function cur() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
-  return s.CURRENCY || localStorage.getItem('crm_currency') || 'ر.س';
+  return s.CURRENCY || readStr('crm_currency') || 'ر.س';
 }
 function moneyC(n) { return money(n) + ' ' + cur(); }
 
@@ -119,7 +160,7 @@ function amountInWords(amount, unitWord, subWord) {
   return 'فقط ' + bits.join(' و') + ' لا غير';
 }
 /** اللوجو بيتخزن على الجهاز — السيرفر بيبعت بصمته بس مع كل تحديث */
-function logoSrc() { return localStorage.getItem('crm_logo') || ''; }
+function logoSrc() { return readStr('crm_logo'); }
 async function syncLogo() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
   const hash = s.COMPANY_LOGO_HASH;
@@ -134,15 +175,15 @@ async function syncLogo() {
   try {
     const r = await api('getLogo', {});
     if (r.logo) {
-      localStorage.setItem('crm_logo', r.logo);
-      localStorage.setItem('crm_logo_hash', r.hash || hash);
+      writeLS('crm_logo', r.logo);
+      writeLS('crm_logo_hash', r.hash || hash);
       render();
     }
   } catch (e) { /* هنجيبه المرة الجاية */ }
 }
 function companyName() {
   const s = (S.data && (S.data.settings || S.data.allSettings)) || {};
-  return s.COMPANY_NAME || localStorage.getItem('crm_company') || 'CRM روافد';
+  return s.COMPANY_NAME || readStr('crm_company') || 'CRM روافد';
 }
 /** بيرسم اللوجو لو مترفع، وإلا بيرجع دايرة فيها أول حرف من اسم الشركة */
 function logoHtml(size, cls) {
@@ -150,7 +191,7 @@ function logoHtml(size, cls) {
   if (src) return `<img class="logo-img ${cls || ''}" style="width:${size}px;height:${size}px" src="${src}" alt="">`;
   return `<div class="logo-circle ${cls || ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.48)}px;border-radius:${Math.round(size * 0.3)}px">${esc(companyName()[0] || 'ر')}</div>`;
 }
-function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+function save(key, val) { return writeLS(key, JSON.stringify(val)); }
 /** وصف مختصر للجهاز — بيظهر للأدمن في قايمة الأجهزة المسجلة */
 function deviceLabel() {
   const ua = navigator.userAgent;
@@ -177,7 +218,7 @@ async function api(action, payload, opts) {
         const r = await api('renew', { device: S.device }, { noRetry: true });
         S.token = r.token;
         S.user = r.user;
-        localStorage.setItem('crm_token', S.token);
+        writeLS('crm_token', S.token);
         save('crm_user', S.user);
         return api(action, payload, { noRetry: true });
       } catch (e) { /* الجهاز اتلغى أو انتهت صلاحيته */ }
@@ -194,13 +235,19 @@ async function api(action, payload, opts) {
  * بيحط العملية في طابور الأوفلاين. بيرجّع false لو مساحة الجهاز خلصت —
  * السندات بقت جواها صورة، فلازم المندوب يعرف إن الحفظ فشل مش يفتكره اتحفظ.
  */
+const QUEUE_MAX_BYTES = 2500000;   // ~2.5 ميجا — السندات فيها صور فالحد ده مهم
+
 function qpush(action, payload) {
   S.queue.push({ action, payload, ts: Date.now() });
-  try {
-    save('crm_queue', S.queue);
-  } catch (e) {
+  const str = JSON.stringify(S.queue);
+  if (str.length > QUEUE_MAX_BYTES) {
     S.queue.pop();
-    toast('📵 مساحة الجهاز خلصت — السند مااتحفظش. اتصل بالنت وحاول تاني', 'err');
+    toast('📵 المحفوظ محليًا وصل للحد الأقصى — لازم تتصل بالنت عشان يترفع الأول', 'err');
+    return false;
+  }
+  if (!writeLS('crm_queue', str)) {
+    S.queue.pop();
+    toast('📵 مساحة الجهاز خلصت — مااتحفظش. اتصل بالنت وحاول تاني', 'err');
     return false;
   }
   render();
@@ -233,8 +280,8 @@ async function refresh(silent) {
     save('crm_boot', res);
     // تخزين هوية الشركة محليًا عشان تظهر في شاشة الدخول قبل تحميل البيانات
     const st = res.settings || res.allSettings || {};
-    if (st.CURRENCY) localStorage.setItem('crm_currency', st.CURRENCY);
-    if (st.COMPANY_NAME) localStorage.setItem('crm_company', st.COMPANY_NAME);
+    if (st.CURRENCY) writeLS('crm_currency', st.CURRENCY);
+    if (st.COMPANY_NAME) writeLS('crm_company', st.COMPANY_NAME);
     syncLogo();       // اللوجو بيتحمّل مرة واحدة بس لو اتغير
     syncProducts();   // وكذلك كتالوج الأصناف
   } catch (e) {
@@ -342,8 +389,8 @@ A.login = async () => {
   try {
     const res = await api('login', { username, pin, device: deviceLabel() }, { noRetry: true });
     S.token = res.token; S.user = res.user; S.device = res.device || '';
-    localStorage.setItem('crm_token', S.token);
-    localStorage.setItem('crm_device', S.device);
+    writeLS('crm_token', S.token);
+    writeLS('crm_device', S.device);
     localStorage.removeItem('crm_creds');   // مبقيناش نخزّن الرقم السري على الجهاز
     save('crm_user', S.user);
     S.tab = 'today'; S.adminTab = 'dash';
@@ -3246,7 +3293,11 @@ function adSettings() {
   return `
     <div class="card">
       <h3>🔑 الربط مع قيود</h3>
-      <label>API Key</label><input id="s-qoyod" value="${esc(s.QOYOD_API_KEY || '')}" style="direction:ltr">
+      <label>API Key</label>
+      <input id="s-qoyod" value="" style="direction:ltr" autocomplete="off"
+        placeholder="${s.QOYOD_API_KEY ? 'متسجل حاليًا: ' + esc(s.QOYOD_API_KEY) : 'الصق مفتاح قيود هنا'}">
+      <p class="muted">سيبه فاضي عشان المفتاح المتسجل ميتغيرش. اكتب فيه بس لو عايز تغيّره.</p>
+      <button class="btn sm ghost" onclick="A.testQoyod()">🔌 اختبر الاتصال بقيود</button>
       <div class="flex mt">
         <button class="btn green" onclick="A.saveSettings()">حفظ الإعدادات ✔</button>
         <button class="btn ghost" onclick="A.syncNow()">🔄 مزامنة دلوقتي</button>
@@ -3621,6 +3672,25 @@ function methodAccountsHtml(s) {
         ${custody.indexOf(m) > -1 ? 'checked' : ''}> عهدة</label>
     </div>`).join('');
 }
+
+A.testQoyod = async () => {
+  toast('⏳ بجرب الاتصال بقيود...');
+  try {
+    const r = await api('testQoyod', {});
+    openModal(`
+      <h2>🔌 اختبار الاتصال بقيود</h2>
+      ${r.ok
+        ? `<div class="card" style="border-right:4px solid var(--green)">
+             <b>✅ ${esc(r.message)}</b>
+             <p class="muted">${esc(r.sample || '')}</p></div>`
+        : `<div class="card" style="border-right:4px solid var(--red)">
+             <b>❌ الاتصال مش شغال</b>
+             <p>${esc(r.error || '')}</p>
+             ${r.masked ? '<p class="muted">ده بيحصل لو حد فتح الإعدادات ولمس خانة المفتاح وحفظ. الحل: هات المفتاح من قيود والصقه تاني.</p>' : ''}
+           </div>`}
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
 
 A.qoyodLists = async () => {
   toast('⏳ بجيب المخازن والحسابات...');
@@ -4294,16 +4364,16 @@ async function uploadAttachment(kind, id, type, dataUrl) {
 }
 
 // ================== الطلبات وسندات القبض ==================
-function products() { return JSON.parse(localStorage.getItem('crm_products') || '[]'); }
+function products() { return readLS('crm_products', []); }
 async function syncProducts() {
   const v = S.data && S.data.productsVersion;
   if (v === undefined) return;
   if (!v) { localStorage.removeItem('crm_products'); localStorage.removeItem('crm_products_v'); return; }
-  if (localStorage.getItem('crm_products_v') === v && products().length) return;
+  if (readStr('crm_products_v') === v && products().length) return;
   try {
     const r = await api('getProducts', {});
-    localStorage.setItem('crm_products', JSON.stringify(r.products || []));
-    localStorage.setItem('crm_products_v', r.version || v);
+    writeLS('crm_products', JSON.stringify(r.products || []));
+    writeLS('crm_products_v', r.version || v);
   } catch (e) { /* هنجيبه المرة الجاية */ }
 }
 function vatPct() {
@@ -4692,7 +4762,7 @@ A.expenseSave = async () => {
  * النقاط بتتخزن محليًا وبتترفع كل شوية — فلو النت قطع مفيش حاجة بتضيع.
  */
 const TRK = {
-  watchId: null, last: null, buf: JSON.parse(localStorage.getItem('crm_track_buf') || '[]'),
+  watchId: null, last: null, buf: readLS('crm_track_buf', []),
   wakeLock: null, timer: null, lastFlush: 0,
   denied: false,      // الإذن مرفوض صراحةً
   failCount: 0,       // محاولات فشلت ورا بعض (GPS مقفول مثلًا)
@@ -4826,7 +4896,7 @@ function pushTrackPoint(lat, lng, acc, source) {
     lat: lat, lng: lng, acc: acc || 0, source: source || 'auto'
   });
   if (TRK.buf.length > 500) TRK.buf = TRK.buf.slice(-500);
-  localStorage.setItem('crm_track_buf', JSON.stringify(TRK.buf));
+  writeLS('crm_track_buf', JSON.stringify(TRK.buf));
   if (TRK.buf.length >= 5) flushTrack();
 }
 
@@ -4838,7 +4908,7 @@ async function flushTrack() {
   try {
     await api('track', { points: batch });
     TRK.buf = TRK.buf.slice(batch.length);
-    localStorage.setItem('crm_track_buf', JSON.stringify(TRK.buf));
+    writeLS('crm_track_buf', JSON.stringify(TRK.buf));
   } catch (e) { /* هنحاول تاني بعدين */ }
 }
 
@@ -4858,6 +4928,7 @@ document.addEventListener('visibilitychange', () => {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 render();
+window.__crmStarted = true;   // بيقول لشبكة الأمان في index.html إن التطبيق فتح فعلًا
 if (S.token) {
   qflush();
   refresh(true).then(() => {
