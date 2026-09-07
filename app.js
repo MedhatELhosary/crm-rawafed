@@ -3673,10 +3673,12 @@ function methodAccountsHtml(s) {
     </div>`).join('');
 }
 
-A.testQoyod = async () => {
+A.testQoyod = async (useTyped) => {
+  const typed = useTyped ? (($('#qy-try') || {}).value || '').trim() : '';
+  if (useTyped && !typed) return toast('اكتب المفتاح في الخانة الأول', 'err');
   toast('⏳ بجرب الاتصال بقيود بكذا طريقة...');
   try {
-    const r = await api('testQoyod', {});
+    const r = await api('testQoyod', typed ? { key: typed } : {});
     const c = r.check || {};
     const flag = (cond, bad, good) => cond ? '<span class="badge hot">' + bad + '</span>'
                                            : '<span class="badge cool">' + good + '</span>';
@@ -3709,7 +3711,19 @@ A.testQoyod = async () => {
           <td style="direction:ltr;text-align:left;font-size:11px;max-width:340px">${esc(t.body || '')}</td>
         </tr>`).join('')}
       </table></div>
-      <p class="muted mt">لو أي سطر فيهم رجّع كود أخضر، قولّي أنهي واحد وأنا أعدّل النظام يستخدمه.</p>
+      ${r.verdict ? '<div class="card" style="border-right:4px solid var(--amber)"><b>الخلاصة</b><p>' + esc(r.verdict) + '</p></div>' : ''}
+      ${(c.duplicateSettings && c.duplicateSettings.length)
+        ? '<div class="card" style="border-right:4px solid var(--red)"><b>🔴 إعدادات متكررة في الشيت</b><p>' +
+          esc(c.duplicateSettings.join('، ')) + ' — امسح الصف الزيادة من تبويب Settings في الشيت.</p></div>' : ''}
+
+      <div class="section-title"><span>جرّب مفتاح من غير ما تحفظه</span></div>
+      <div class="card">
+        <p class="muted">الصق المفتاح اللي شغال عندك في الإكسيل — هيتجرب دلوقتي بس ومش هيتحفظ في أي مكان.</p>
+        <input id="qy-try" style="direction:ltr" autocomplete="off" placeholder="الصق المفتاح هنا للتجربة">
+        <button class="btn mt" onclick="A.testQoyod(true)">جرّب المفتاح ده</button>
+      </div>
+      ${r.usingTyped ? '<p class="muted">النتيجة اللي فوق دي للمفتاح اللي كتبته انت، مش المتسجل.</p>' : ''}
+      <p class="muted mt">لو أي سطر رجّع كود أخضر، قولّي أنهي واحد وأنا أعدّل النظام يستخدمه.</p>
       <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
