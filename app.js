@@ -3674,21 +3674,43 @@ function methodAccountsHtml(s) {
 }
 
 A.testQoyod = async () => {
-  toast('⏳ بجرب الاتصال بقيود...');
+  toast('⏳ بجرب الاتصال بقيود بكذا طريقة...');
   try {
     const r = await api('testQoyod', {});
+    const c = r.check || {};
+    const flag = (cond, bad, good) => cond ? '<span class="badge hot">' + bad + '</span>'
+                                           : '<span class="badge cool">' + good + '</span>';
     openModal(`
-      <h2>🔌 اختبار الاتصال بقيود</h2>
+      <h2>🔌 تشخيص الاتصال بقيود</h2>
       ${r.ok
-        ? `<div class="card" style="border-right:4px solid var(--green)">
-             <b>✅ ${esc(r.message)}</b>
-             <p class="muted">${esc(r.sample || '')}</p></div>`
+        ? `<div class="card" style="border-right:4px solid var(--green)"><b>✅ ${esc(r.message)}</b></div>`
         : `<div class="card" style="border-right:4px solid var(--red)">
-             <b>❌ الاتصال مش شغال</b>
-             <p>${esc(r.error || '')}</p>
-             ${r.masked ? '<p class="muted">ده بيحصل لو حد فتح الإعدادات ولمس خانة المفتاح وحفظ. الحل: هات المفتاح من قيود والصقه تاني.</p>' : ''}
-           </div>`}
-      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`);
+             <b>❌ الاتصال مش شغال</b><p>${esc(r.error || '')}</p></div>`}
+
+      <div class="section-title"><span>المفتاح المتسجل عندنا</span></div>
+      <div class="card">
+        <div class="stat-line"><span>عدد الخانات</span><b>${c.trimmedLength}</b></div>
+        <div class="stat-line"><span>آخر 4 خانات</span><b style="direction:ltr">${esc(c.tail || '')}</b></div>
+        <div class="stat-line"><span>فيه مسافات؟</span>${flag(c.hasSpace, 'أيوه — دي مشكلة', 'لأ')}</div>
+        <div class="stat-line"><span>فيه سطر جديد؟</span>${flag(c.hasNewline, 'أيوه — دي مشكلة', 'لأ')}</div>
+        <div class="stat-line"><span>فيه علامة اقتباس في الأول؟</span>${flag(c.hasQuote, 'أيوه — دي مشكلة', 'لأ')}</div>
+        <div class="stat-line"><span>فيه حروف غريبة؟</span>${flag(c.nonAscii, 'أيوه — دي مشكلة', 'لأ')}</div>
+        <div class="stat-line"><span>اتحفظ كرقم؟</span>${flag(c.looksNumeric, 'أيوه — ممكن يكون اتغير', 'لأ')}</div>
+      </div>
+      <p class="muted">قارن <b>عدد الخانات وآخر 4 خانات</b> باللي شغال عندك في الإكسيل — لو مختلفين، المفتاح المتسجل عندنا مش هو.</p>
+
+      <div class="section-title"><span>رد قيود على كل محاولة</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>الطريقة</th><th>الكود</th><th>رد قيود</th></tr>
+        ${(r.tried || []).map(t => `<tr>
+          <td>${esc(t.name)}</td>
+          <td>${t.code >= 200 && t.code < 300 ? '<span class="badge cool">' + t.code + '</span>'
+               : '<span class="badge hot">' + esc(String(t.code)) + '</span>'}</td>
+          <td style="direction:ltr;text-align:left;font-size:11px;max-width:340px">${esc(t.body || '')}</td>
+        </tr>`).join('')}
+      </table></div>
+      <p class="muted mt">لو أي سطر فيهم رجّع كود أخضر، قولّي أنهي واحد وأنا أعدّل النظام يستخدمه.</p>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
