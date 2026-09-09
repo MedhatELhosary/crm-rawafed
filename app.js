@@ -3186,27 +3186,12 @@ function adRegions() {
       </div>
 
       ${(r.periods && r.periods.length) ? `<div class="card" style="border-right:4px solid var(--blue)">
-        <b>📊 مقارنة الفترات</b>
+        <b>📊 مقارنة الفترات — كل المناطق</b>
         <p class="muted">الفترة الحالية: ${esc(r.from)} ← ${esc(r.to)}</p>
-        <div class="table-wrap"><table>
-          <tr><th>البند</th><th>الفترة الحالية</th>
-            ${r.periods.map(p => `<th>${esc(p.label)}<div class="muted" style="font-weight:400;font-size:10px">${esc(p.from)} ← ${esc(p.to)}</div></th>`).join('')}
-          </tr>
-          ${[['المبيعات شامل الضريبة', 'grossSales', false],
-             ['المرتجعات', 'returns', true],
-             ['الخصومات', 'discount', true],
-             ['صافي المبيعات', 'netSales', false],
-             ['التحصيلات', 'collected', false]].map(([lbl, k, lower]) => `<tr>
-            <td><b>${lbl}</b></td>
-            <td><b>${money(r.totals[k])}</b></td>
-            ${r.periods.map(p => `<td>${money(p.totals[k])}<div>${chgBadge(p.change[k], lower)}</div></td>`).join('')}
-          </tr>`).join('')}
-          <tr><td><b>نسبة التحصيل</b></td>
-            <td><b>${pct(r.totals.collectionRate)}</b></td>
-            ${r.periods.map(p => `<td>${pct(p.totals.collectionRate)}<div>${ptsBadge(p.change.collectionRate)}</div></td>`).join('')}
-          </tr>
-        </table></div>
-        <p class="muted mt">السهم الأخضر = اتجاه كويس. المرتجعات والخصومات لما بيزيدوا بيطلعوا أحمر
+        ${cmpTable(r.totals, r.periods, (() => {
+          const d = {}; r.periods.forEach(p => d[p.key] = { snapshot: p.totals, change: p.change }); return d;
+        })())}
+        <p class="muted mt">السهم الأخضر = اتجاه كويس. المرتجعات والخصومات والمتأخرات لما بيزيدوا بيطلعوا أحمر
         لأن زيادتهم مش في صالحك.</p>
       </div>` : ''}
 
@@ -3243,7 +3228,7 @@ function adRegions() {
             <th>المرتجعات</th><th>% مرتجع</th>
             <th>الخصم</th><th>% خصم</th>
             <th>صافي المبيعات</th><th>التحصيلات</th><th>% تحصيل</th>
-            <th>المتأخرات</th><th>التغطية</th><th>التقييم</th>${(r.periods && r.periods.length) ? r.periods.map(p => '<th>مقابل ' + esc(p.label) + '</th>').join('') : ''}</tr>
+            <th>المتأخرات</th><th>التغطية</th><th>% اشتروا</th><th>التقييم</th>${(r.periods && r.periods.length) ? r.periods.map(p => '<th>مقابل ' + esc(p.label) + '</th>').join('') : ''}</tr>
         ${r.rows.map(x => `<tr>
           <td><b>${esc(x.name)}</b>${x.reps.length ? '<div class="muted" style="font-size:11px">' + esc(x.reps.join('، ')) + '</div>' : ''}</td>
           <td>${x.activeCustomers}</td>
@@ -3258,14 +3243,16 @@ function adRegions() {
           <td>${good(x.collectionRate, 90, 60)}</td>
           <td>${x.overdue ? '<span class="neg">' + money(x.overdue) + '</span><div class="muted" style="font-size:10px">' + pct(x.overdueRate) + '</div>' : '—'}</td>
           <td>${x.coverage === null ? '—' : x.coverage + '%<div class="muted" style="font-size:10px">' + x.covered + '/' + x.activeCustomers + '</div>'}</td>
-          <td>${scoreBadge(x)}</td>
+          <td>${x.activation === null ? '—' : good(x.activation, 60, 30) + '<div class="muted" style="font-size:10px">' + x.buyers + '/' + x.activeCustomers + '</div>'}</td>
+          <td>${scoreBadge(x)}${r.hasGrowth && x.growthPrev !== null && x.growthPrev !== undefined
+            ? '<div style="margin-top:3px">' + chgBadge(x.growthPrev, false) + '</div>' : ''}</td>
           ${(r.periods && r.periods.length) ? r.periods.map(p => {
             const pv = (x.periods || {})[p.key];
             return '<td>' + (pv
-              ? money(pv.grossSales) + '<div>' + chgBadge(pv.changeSales, false) + '</div>'
+              ? money(pv.snapshot.grossSales) + '<div>' + chgBadge(pv.change.grossSales, false) + '</div>'
               : '<span class="muted">مفيش</span>') + '</td>';
           }).join('') : ''}
-        </tr>`).join('') || '<tr><td colspan="14" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="15" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
         <tr style="background:var(--blue-soft)">
           <td><b>الإجمالي</b></td><td><b>${r.totals.customers}</b></td>
           <td><b>${money(r.totals.grossSales)}</b></td><td>100%</td>
@@ -3273,26 +3260,137 @@ function adRegions() {
           <td><b>${money(r.totals.discount)}</b></td><td><b>${pct(r.totals.discountRate)}</b></td>
           <td><b>${money(r.totals.netSales)}</b></td>
           <td><b>${money(r.totals.collected)}</b></td><td><b>${pct(r.totals.collectionRate)}</b></td>
-          <td><b>${money(r.totals.overdue)}</b></td><td>—</td><td>—</td>
+          <td><b>${money(r.totals.overdue)}</b></td>
+          <td><b>${r.totals.coverage === null ? '—' : r.totals.coverage + '%'}</b></td>
+          <td><b>${r.totals.activation === null ? '—' : r.totals.activation + '%'}</b></td>
+          <td>${scoreBadge(r.totals)}</td>
           ${(r.periods && r.periods.length) ? r.periods.map(p => '<td><b>' + money(p.totals.grossSales) + '</b></td>').join('') : ''}
         </tr>
       </table></div>
 
+      ${(r.periods && r.periods.length) ? `
+      <div class="section-title"><span>كل منطقة لوحدها (${r.rows.length})</span></div>
+      <p class="muted">نفس بنود المقارنة اللي فوق، بس لكل منطقة على حدة — عشان تقيس أداءها هي،
+      مش نصيبها من الإجمالي. اضغط على اسم المنطقة تفتح.</p>
+      ${r.rows.map((x, i) => `<details class="card" ${i === 0 ? 'open' : ''}>
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <b style="font-size:15px">${esc(x.name)}</b>
+          <span>${scoreBadge(x)}</span>
+        </summary>
+        <div class="mt">
+          ${x.reps.length ? '<p class="muted">المندوبين: ' + esc(x.reps.join('، ')) + ' · العملاء النشطين: ' + x.activeCustomers + '</p>' : ''}
+          ${cmpTable(x, r.periods, x.periods || {})}
+          <div class="section-title mt"><span>التقييم جه منين؟</span></div>
+          ${scoreBreakdown(x.scoreParts, x.score, x.rating)}
+        </div>
+      </details>`).join('')}` : ''}
+
       <div class="card mt">
         <b>📐 التقييم بيتحسب إزاي؟</b>
         <p class="muted">درجة من 100 — كل عنصر بوزنه:</p>
-        <div class="stat-line"><span>نسبة التحصيل من صافي المبيعات</span><b>${r.weights.collection}%</b></div>
-        <div class="stat-line"><span>نسبة المرتجعات <span class="muted">(${r.targets.returns}% أو أكتر = صفر)</span></span><b>${r.weights.returns}%</b></div>
-        <div class="stat-line"><span>نسبة الخصم <span class="muted">(${r.targets.discount}% أو أكتر = صفر)</span></span><b>${r.weights.discount}%</b></div>
-        <div class="stat-line"><span>تغطية العملاء بالزيارات</span><b>${r.weights.coverage}%</b></div>
-        <div class="stat-line"><span>صحة المتأخرات <span class="muted">(${r.targets.overdue}% أو أكتر = صفر)</span></span><b>${r.weights.overdue}%</b></div>
+        <div class="stat-line"><span>نسبة التحصيل من صافي المبيعات</span><b>${r.weights.collection}</b></div>
+        <div class="stat-line"><span>نسبة المرتجعات <span class="muted">(${r.targets.returns}% أو أكتر = صفر)</span></span><b>${r.weights.returns}</b></div>
+        <div class="stat-line"><span>نسبة الخصم <span class="muted">(${r.targets.discount}% أو أكتر = صفر)</span></span><b>${r.weights.discount}</b></div>
+        <div class="stat-line"><span>تغطية العملاء بالزيارات</span><b>${r.weights.coverage}</b></div>
+        <div class="stat-line"><span>نسبة العملاء اللي اشتروا فعلًا <span class="muted">(الزيارة تحوّلت لبيع ولا لأ)</span></span><b>${r.weights.activation}</b></div>
+        <div class="stat-line"><span>صحة المتأخرات <span class="muted">(${r.targets.overdue}% أو أكتر = صفر)</span></span><b>${r.weights.overdue}</b></div>
+        ${r.hasGrowth ? `
+        <div class="stat-line"><span>النمو عن الفترة السابقة <span class="muted">(الهدف +${r.targets.growthPrev}%)</span></span><b>${r.weights.growthPrev}</b></div>
+        <div class="stat-line"><span>النمو عن نفس الفترة السنة اللي فاتت <span class="muted">(الهدف +${r.targets.growthYear}%)</span></span><b>${r.weights.growthY1}</b></div>
+        <div class="stat-line"><span>النمو عن نفس الفترة من سنتين <span class="muted">(الهدف +${r.targets.growthY2}%)</span></span><b>${r.weights.growthY2}</b></div>
+        <p class="muted mt">🌱 <b>النمو</b>: الثبات = نص الدرجة، الوصول للهدف = الدرجة كاملة،
+        والنزول بنفس قدر الهدف = صفر. هدف السنتين مركّب من السنوي (مش الضعف).</p>`
+        : '<p class="muted mt">🌱 عناصر النمو مش داخلة دلوقتي — علّم على <b>"قارن بالفترة السابقة ونفس الفترة من سنة ومن سنتين"</b> فوق عشان تدخل في التقييم.</p>'}
         <p class="muted mt">الأوزان والحدود دي كلها تتظبط من <b>الإعدادات</b> حسب طبيعة شغلك.
-        ولو عنصر مش قابل للقياس في الفترة (منطقة مفيهاش مبيعات مثلًا) بيتشال ووزنه يتوزع على الباقي.</p>
+        ولو عنصر مش قابل للقياس في الفترة (منطقة مفيهاش مبيعات مثلًا) بيتشال ووزنه يتوزع على الباقي أوتوماتيك،
+        فمنطقة لسه جديدة متتظلمش بصفر في حاجة مالهاش معنى عندها.</p>
         <p class="muted">80 فأكتر ممتاز · 60–79 جيد · 40–59 متوسط · أقل من 40 محتاج تدخل</p>
+      </div>
+
+      <div class="card">
+        <b>🧮 تقييم الشركة ككل: ${r.totals.score === null ? '—' : r.totals.score + ' — ' + esc(r.totals.rating)}</b>
+        <p class="muted">نفس القواعد بالظبط، بس على كل المناطق مع بعض.</p>
+        ${scoreBreakdown(r.totals.scoreParts, r.totals.score, r.totals.rating)}
       </div>
       <p class="muted">المبيعات والمرتجعات والخصم والتحصيلات <b>خلال الفترة</b>.
       الأرصدة والمتأخرات <b>لحظية</b> (الوضع دلوقتي).</p>
     `}`;
+}
+
+/** بنود جدول المقارنة — نفس الترتيب للإجمالي ولكل منطقة */
+function cmpLines() {
+  return [
+    { k: 'grossSales',     lbl: 'المبيعات شامل الضريبة', money: true },
+    { k: 'returns',        lbl: 'المرتجعات',             money: true, lower: true },
+    { k: 'discount',       lbl: 'الخصومات',              money: true, lower: true },
+    { k: 'netSales',       lbl: 'صافي المبيعات',         money: true },
+    { k: 'collected',      lbl: 'التحصيلات',             money: true },
+    { k: 'visits',         lbl: 'الزيارات',              money: false },
+    { k: 'buyers',         lbl: 'عملاء اشتروا',          money: false },
+    { k: 'collectionRate', lbl: 'نسبة التحصيل',          rate: true },
+    { k: 'returnRate',     lbl: 'نسبة المرتجع',          rate: true, lower: true },
+    { k: 'discountRate',   lbl: 'نسبة الخصم',            rate: true, lower: true },
+    { k: 'coverage',       lbl: 'تغطية الزيارات',        rate: true },
+    { k: 'activation',     lbl: 'نسبة العملاء اللي اشتروا', rate: true },
+    { k: 'overdueRate',    lbl: 'نسبة المتأخرات',        rate: true, lower: true }
+  ];
+}
+
+/**
+ * جدول "البند × الفترات". بيشتغل بنفس الشكل للإجمالي ولأي منطقة —
+ * الفرق بس إن الإجمالي بياخد totals والمنطقة بتاخد صف المنطقة.
+ * now: الصف الحالي، periods: [{key,label,from,to}], data: {key → {snapshot, change}}
+ */
+function cmpTable(now, periods, data) {
+  const pctv = v => v === null || v === undefined ? '—' : v + '%';
+  return `<div class="table-wrap"><table>
+    <tr><th>البند</th><th>الفترة الحالية</th>
+      ${periods.map(p => `<th>${esc(p.label)}<div class="muted" style="font-weight:400;font-size:10px">${esc(p.from)} ← ${esc(p.to)}</div></th>`).join('')}
+    </tr>
+    ${cmpLines().map(L => {
+      const cur = now[L.k];
+      return `<tr>
+        <td><b>${L.lbl}</b></td>
+        <td><b>${L.rate ? pctv(cur) : (L.money ? money(cur) : (cur === null || cur === undefined ? '—' : cur))}</b></td>
+        ${periods.map(p => {
+          const d = data[p.key];
+          if (!d) return '<td><span class="muted">مفيش</span></td>';
+          const was = d.snapshot[L.k], chg = d.change[L.k];
+          return '<td>' + (L.rate ? pctv(was) : (L.money ? money(was) : (was === null || was === undefined ? '—' : was))) +
+                 '<div>' + (L.rate ? ptsBadge(chg) : chgBadge(chg, !!L.lower)) + '</div></td>';
+        }).join('')}
+      </tr>`;
+    }).join('')}
+    <tr style="background:var(--blue-soft)">
+      <td><b>التقييم التشغيلي</b><div class="muted" style="font-size:10px">من غير النمو — عشان المقارنة تبقى عادلة</div></td>
+      <td><b>${now.baseScore === null || now.baseScore === undefined ? '—' : now.baseScore}</b></td>
+      ${periods.map(p => {
+        const d = data[p.key];
+        if (!d) return '<td><span class="muted">مفيش</span></td>';
+        return '<td>' + (d.snapshot.baseScore === null || d.snapshot.baseScore === undefined ? '—' : d.snapshot.baseScore) +
+               '<div>' + ptsBadge(d.change.baseScore) + '</div></td>';
+      }).join('')}
+    </tr>
+  </table></div>`;
+}
+
+/** تفصيل التقييم: كل عنصر بوزنه ودرجته والنقط اللي ضافها */
+function scoreBreakdown(parts, score, rating) {
+  if (!parts || !parts.length) return '<p class="muted">مفيش عناصر كفاية للتقييم في الفترة دي.</p>';
+  return `<div class="table-wrap"><table>
+    <tr><th>العنصر</th><th>الوضع</th><th>الدرجة</th><th>الوزن</th><th>ضاف للتقييم</th></tr>
+    ${parts.map(p => `<tr>
+      <td><b>${esc(p.label)}</b></td>
+      <td class="muted" style="font-size:11px">${esc(p.detail)}</td>
+      <td><span class="badge ${p.score >= 80 ? 'cool' : p.score >= 60 ? 'info' : p.score >= 40 ? 'warm' : 'hot'}">${p.score}</span></td>
+      <td>${p.share}%</td>
+      <td><b>${p.points}</b></td>
+    </tr>`).join('')}
+    <tr style="background:var(--blue-soft)">
+      <td colspan="4"><b>التقييم النهائي</b></td>
+      <td><b>${score === null || score === undefined ? '—' : score + ' — ' + esc(rating)}</b></td>
+    </tr>
+  </table></div>`;
 }
 
 /** شارة نسبة التغيير — lowerIsBetter للمرتجعات والخصم */
@@ -3578,7 +3676,13 @@ A.exportRegions = () => {
       'نسبة المتأخرات %': x.overdueRate === null ? '' : x.overdueRate,
       'الزيارات': x.visits, 'عملاء اتزاروا': x.covered,
       'التغطية %': x.coverage === null ? '' : x.coverage,
+      'عملاء اشتروا': x.buyers,
+      'نسبة اللي اشتروا %': x.activation === null ? '' : x.activation,
+      'نمو عن الفترة السابقة %': x.growthPrev === null || x.growthPrev === undefined ? '' : x.growthPrev,
+      'نمو عن سنة %': x.growthY1 === null || x.growthY1 === undefined ? '' : x.growthY1,
+      'نمو عن سنتين %': x.growthY2 === null || x.growthY2 === undefined ? '' : x.growthY2,
       'فواتير تفاصيلها ناقصة': x.noDetail,
+      'الدرجة التشغيلية': x.baseScore === null ? '' : x.baseScore,
       'الدرجة': x.score === null ? '' : x.score, 'التقييم': x.rating
     })));
 };
@@ -3991,13 +4095,29 @@ function adSettings() {
           <div><label>وزن الخصم</label><input id="s-w-disc" type="text" inputmode="numeric" value="${esc(s.SCORE_W_DISCOUNT || '15')}"></div>
           <div><label>وزن التغطية</label><input id="s-w-cov" type="text" inputmode="numeric" value="${esc(s.SCORE_W_COVERAGE || '15')}"></div>
         </div>
-        <div><label>وزن صحة المتأخرات</label><input id="s-w-over" type="text" inputmode="numeric" value="${esc(s.SCORE_W_OVERDUE || '15')}"></div>
+        <div class="grid2">
+          <div><label>وزن صحة المتأخرات</label><input id="s-w-over" type="text" inputmode="numeric" value="${esc(s.SCORE_W_OVERDUE || '15')}"></div>
+          <div><label>وزن نسبة العملاء اللي اشتروا</label><input id="s-w-act" type="text" inputmode="numeric" value="${esc(s.SCORE_W_ACTIVATION || '10')}"></div>
+        </div>
+        <div class="section-title" style="margin-bottom:4px"><span>أوزان النمو (بتشتغل لما تعلّم على المقارنة في التقرير)</span></div>
+        <div class="grid2">
+          <div><label>وزن النمو عن الفترة السابقة</label><input id="s-w-gp" type="text" inputmode="numeric" value="${esc(s.SCORE_W_GROWTH_PREV || '12')}"></div>
+          <div><label>وزن النمو عن سنة</label><input id="s-w-g1" type="text" inputmode="numeric" value="${esc(s.SCORE_W_GROWTH_Y1 || '8')}"></div>
+        </div>
+        <div><label>وزن النمو عن سنتين</label><input id="s-w-g2" type="text" inputmode="numeric" value="${esc(s.SCORE_W_GROWTH_Y2 || '5')}"></div>
         <div class="section-title" style="margin-bottom:4px"><span>الحدود الحمرا (النسبة اللي عندها العنصر ياخد صفر)</span></div>
         <div class="grid2">
           <div><label>نسبة المرتجعات %</label><input id="s-t-ret" type="text" inputmode="numeric" value="${esc(s.TARGET_RETURN_RATE || '5')}"></div>
           <div><label>نسبة الخصم %</label><input id="s-t-disc" type="text" inputmode="numeric" value="${esc(s.TARGET_DISCOUNT_RATE || '10')}"></div>
         </div>
         <div><label>نسبة المتأخرات %</label><input id="s-t-over" type="text" inputmode="numeric" value="${esc(s.TARGET_OVERDUE_RATE || '20')}"></div>
+        <div class="section-title" style="margin-bottom:4px"><span>النمو المستهدف (الوصول ليه = الدرجة كاملة)</span></div>
+        <div class="grid2">
+          <div><label>نمو عن الفترة السابقة %</label><input id="s-t-gp" type="text" inputmode="numeric" value="${esc(s.TARGET_GROWTH_PREV || '5')}"></div>
+          <div><label>نمو سنوي %</label><input id="s-t-gy" type="text" inputmode="numeric" value="${esc(s.TARGET_GROWTH_YEAR || '15')}"></div>
+        </div>
+        <p class="muted">الثبات بياخد نص الدرجة، والنزول بنفس قدر الهدف بياخد صفر.
+        هدف السنتين بيتحسب لوحده من السنوي (مركّب، مش الضعف).</p>
       </div>
       <div class="card mt" style="background:var(--blue-soft)">
         <b>🔢 ترقيم المستندات المرسلة لقيود</b>
@@ -4139,7 +4259,13 @@ A.saveSettings = async () => {
     SCORE_W_OVERDUE: normDigits($('#s-w-over').value) || '15',
     TARGET_RETURN_RATE: normDigits($('#s-t-ret').value) || '5',
     TARGET_DISCOUNT_RATE: normDigits($('#s-t-disc').value) || '10',
-    TARGET_OVERDUE_RATE: normDigits($('#s-t-over').value) || '20'
+    TARGET_OVERDUE_RATE: normDigits($('#s-t-over').value) || '20',
+    SCORE_W_ACTIVATION: normDigits($('#s-w-act').value) || '10',
+    SCORE_W_GROWTH_PREV: normDigits($('#s-w-gp').value) || '12',
+    SCORE_W_GROWTH_Y1: normDigits($('#s-w-g1').value) || '8',
+    SCORE_W_GROWTH_Y2: normDigits($('#s-w-g2').value) || '5',
+    TARGET_GROWTH_PREV: normDigits($('#s-t-gp').value) || '5',
+    TARGET_GROWTH_YEAR: normDigits($('#s-t-gy').value) || '15'
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
