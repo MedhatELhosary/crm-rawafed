@@ -3149,8 +3149,12 @@ function adRegions() {
   const monthStart = today.slice(0, 8) + '01';
   const cur$ = (r && r.currency) || cur();
   const pct = v => v === null || v === undefined ? '—' : v + '%';
-  const rateBadge = v => v === null ? '<span class="muted">—</span>'
-    : '<span class="badge ' + (v >= 90 ? 'cool' : v >= 60 ? 'warm' : 'hot') + '">' + v + '%</span>';
+  // الأخضر للكويس — والاتجاه بيختلف: التحصيل والتغطية كل ما زادوا أحسن،
+  // والمرتجعات والخصم والمتأخرات كل ما قلّوا أحسن
+  const good = (v, hi, mid) => v === null ? '<span class="muted">—</span>'
+    : '<span class="badge ' + (v >= hi ? 'cool' : v >= mid ? 'warm' : 'hot') + '">' + v + '%</span>';
+  const low = (v, lo, mid) => v === null ? '<span class="muted">—</span>'
+    : '<span class="badge ' + (v <= lo ? 'cool' : v <= mid ? 'warm' : 'hot') + '">' + v + '%</span>';
   const scoreBadge = x => x.score === null
     ? '<span class="badge gray">' + esc(x.rating) + '</span>'
     : '<span class="badge ' + (x.score >= 80 ? 'cool' : x.score >= 60 ? 'info' : x.score >= 40 ? 'warm' : 'hot') +
@@ -3171,14 +3175,31 @@ function adRegions() {
     </div>
 
     ${!r ? '<div class="empty"><div class="big">🗺️</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
+      <div class="card" style="background:var(--blue-soft)">
+        <b>💡 كل الأرقام شاملة ضريبة القيمة المضافة (${r.vatPercent}%)</b>
+        <p class="muted">عشان المبيعات تبقى قابلة للمقارنة بالتحصيل — العميل بيدفع المبلغ شامل الضريبة.
+        الضريبة والخصم معروضين لوحدهم تحت.</p>
+      </div>
+
       <div class="kpi-grid">
-        <div class="kpi"><div class="num">${money(r.totals.netSales)}</div><div class="lbl">صافي المبيعات (${esc(cur$)})</div></div>
+        <div class="kpi"><div class="num">${money(r.totals.grossSales)}</div><div class="lbl">إجمالي المبيعات شامل الضريبة (${esc(cur$)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--red)">${money(r.totals.returns)}</div>
+          <div class="lbl">المرتجعات (${pct(r.totals.returnRate)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--amber)">${money(r.totals.discount)}</div>
+          <div class="lbl">الخصومات (${pct(r.totals.discountRate)})</div></div>
         <div class="kpi"><div class="num" style="color:var(--green)">${money(r.totals.collected)}</div><div class="lbl">التحصيلات</div></div>
         <div class="kpi"><div class="num" style="color:${(r.totals.collectionRate || 0) >= 90 ? 'var(--green)' : (r.totals.collectionRate || 0) >= 60 ? 'var(--amber)' : 'var(--red)'}">${pct(r.totals.collectionRate)}</div>
-          <div class="lbl">نسبة التحصيل للمبيعات</div></div>
+          <div class="lbl">نسبة التحصيل من صافي المبيعات</div></div>
+        <div class="kpi"><div class="num">${money(r.totals.tax)}</div><div class="lbl">الضريبة داخل المبيعات</div></div>
+        <div class="kpi"><div class="num">${money(r.totals.salesBeforeVat)}</div><div class="lbl">المبيعات قبل الضريبة</div></div>
         <div class="kpi"><div class="num" style="color:${r.totals.overdue ? 'var(--red)' : 'var(--green)'}">${money(r.totals.overdue)}</div>
           <div class="lbl">المتأخرات (${pct(r.totals.overdueRate)} من الرصيد)</div></div>
       </div>
+
+      ${r.totals.noDetail ? `<div class="card" style="border-right:4px solid var(--amber)">
+        <b>⚠️ ${r.totals.noDetail} فاتورة تفاصيلها مش مكتملة</b>
+        <p class="muted">قيود مرجّعش بنودها أو الأرقام مش مطابقة، فالضريبة والخصم بتاعها مش داخلة في الأرقام فوق.
+        الإجمالي والتحصيل مظبوطين برضه.</p></div>` : ''}
       ${r.totals.pendingCollections ? `<div class="card" style="border-right:4px solid var(--amber)">
         <b>ℹ️ ${money(r.totals.pendingCollections)} ${esc(cur$)} تحصيلات مسجلة عندنا ولسه مترحّلتش لقيود</b>
         <p class="muted">الأرقام فوق من قيود — فالمبلغ ده لسه مش داخل فيها.</p></div>` : ''}
@@ -3186,44 +3207,54 @@ function adRegions() {
       <div class="section-title"><span>ترتيب المناطق (${r.rows.length})</span>
         <button class="btn sm ghost" onclick="A.exportRegions()">⬇️ تنزيل Excel</button></div>
       <div class="table-wrap"><table>
-        <tr><th>المنطقة</th><th>المناديب</th><th>العملاء</th>
-            <th>صافي المبيعات</th><th>% من الإجمالي</th>
-            <th>التحصيلات</th><th>% من الإجمالي</th>
-            <th>نسبة التحصيل</th><th>المتأخرات</th><th>التغطية</th><th>التقييم</th></tr>
+        <tr><th>المنطقة</th><th>العملاء</th>
+            <th>المبيعات<br><span style="font-weight:400;font-size:10px">شامل الضريبة</span></th>
+            <th>% من الإجمالي</th>
+            <th>المرتجعات</th><th>% مرتجع</th>
+            <th>الخصم</th><th>% خصم</th>
+            <th>صافي المبيعات</th><th>التحصيلات</th><th>% تحصيل</th>
+            <th>المتأخرات</th><th>التغطية</th><th>التقييم</th></tr>
         ${r.rows.map(x => `<tr>
           <td><b>${esc(x.name)}</b>${x.reps.length ? '<div class="muted" style="font-size:11px">' + esc(x.reps.join('، ')) + '</div>' : ''}</td>
-          <td>${x.repsCount}</td>
           <td>${x.activeCustomers}</td>
-          <td><b>${money(x.netSales)}</b>${x.returns ? '<div class="muted" style="font-size:11px">مرتجع ' + money(x.returns) + '</div>' : ''}</td>
+          <td><b>${money(x.grossSales)}</b><div class="muted" style="font-size:10px">ضريبة ${money(x.tax)}</div></td>
           <td>${x.salesShare}%<div class="bar"><i style="width:${Math.min(100, x.salesShare)}%"></i></div></td>
-          <td class="pos"><b>${money(x.collected)}</b></td>
-          <td>${x.collectedShare}%</td>
-          <td>${rateBadge(x.collectionRate)}</td>
-          <td>${x.overdue ? '<span class="neg">' + money(x.overdue) + '</span><div class="muted" style="font-size:11px">' + pct(x.overdueRate) + ' من الرصيد</div>' : '—'}</td>
-          <td>${x.coverage === null ? '—' : x.coverage + '%<div class="muted" style="font-size:11px">' + x.covered + ' من ' + x.activeCustomers + '</div>'}</td>
+          <td class="neg">${x.returns ? money(x.returns) : '—'}</td>
+          <td>${low(x.returnRate, r.targets.returns / 2, r.targets.returns)}</td>
+          <td>${x.discount ? money(x.discount) : '—'}</td>
+          <td>${low(x.discountRate, r.targets.discount / 2, r.targets.discount)}</td>
+          <td><b>${money(x.netSales)}</b></td>
+          <td class="pos"><b>${money(x.collected)}</b><div class="muted" style="font-size:10px">${x.collectedShare}% من الإجمالي</div></td>
+          <td>${good(x.collectionRate, 90, 60)}</td>
+          <td>${x.overdue ? '<span class="neg">' + money(x.overdue) + '</span><div class="muted" style="font-size:10px">' + pct(x.overdueRate) + '</div>' : '—'}</td>
+          <td>${x.coverage === null ? '—' : x.coverage + '%<div class="muted" style="font-size:10px">' + x.covered + '/' + x.activeCustomers + '</div>'}</td>
           <td>${scoreBadge(x)}</td>
-        </tr>`).join('') || '<tr><td colspan="11" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="14" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
         <tr style="background:var(--blue-soft)">
-          <td><b>الإجمالي</b></td><td>—</td><td><b>${r.totals.customers}</b></td>
-          <td><b>${money(r.totals.netSales)}</b></td><td>100%</td>
-          <td><b>${money(r.totals.collected)}</b></td><td>100%</td>
-          <td><b>${pct(r.totals.collectionRate)}</b></td>
-          <td><b>${money(r.totals.overdue)}</b></td>
-          <td>—</td><td>—</td>
+          <td><b>الإجمالي</b></td><td><b>${r.totals.customers}</b></td>
+          <td><b>${money(r.totals.grossSales)}</b></td><td>100%</td>
+          <td><b>${money(r.totals.returns)}</b></td><td><b>${pct(r.totals.returnRate)}</b></td>
+          <td><b>${money(r.totals.discount)}</b></td><td><b>${pct(r.totals.discountRate)}</b></td>
+          <td><b>${money(r.totals.netSales)}</b></td>
+          <td><b>${money(r.totals.collected)}</b></td><td><b>${pct(r.totals.collectionRate)}</b></td>
+          <td><b>${money(r.totals.overdue)}</b></td><td>—</td><td>—</td>
         </tr>
       </table></div>
 
       <div class="card mt">
         <b>📐 التقييم بيتحسب إزاي؟</b>
-        <p class="muted">درجة من 100 من تلات عناصر:</p>
-        <div class="stat-line"><span>نسبة التحصيل للمبيعات</span><b>${r.weights.collectionRate}%</b></div>
+        <p class="muted">درجة من 100 — كل عنصر بوزنه:</p>
+        <div class="stat-line"><span>نسبة التحصيل من صافي المبيعات</span><b>${r.weights.collection}%</b></div>
+        <div class="stat-line"><span>نسبة المرتجعات <span class="muted">(${r.targets.returns}% أو أكتر = صفر)</span></span><b>${r.weights.returns}%</b></div>
+        <div class="stat-line"><span>نسبة الخصم <span class="muted">(${r.targets.discount}% أو أكتر = صفر)</span></span><b>${r.weights.discount}%</b></div>
         <div class="stat-line"><span>تغطية العملاء بالزيارات</span><b>${r.weights.coverage}%</b></div>
-        <div class="stat-line"><span>صحة المتأخرات (كل ما قلّت زاد التقييم)</span><b>${r.weights.overdueHealth}%</b></div>
-        <p class="muted mt">لو عنصر مش قابل للقياس في الفترة (مثلًا منطقة مفيهاش مبيعات خالص)،
-        بيتشال ووزنه بيتوزع على الباقي — عشان المنطقة ماتتظلمش بصفر.</p>
+        <div class="stat-line"><span>صحة المتأخرات <span class="muted">(${r.targets.overdue}% أو أكتر = صفر)</span></span><b>${r.weights.overdue}%</b></div>
+        <p class="muted mt">الأوزان والحدود دي كلها تتظبط من <b>الإعدادات</b> حسب طبيعة شغلك.
+        ولو عنصر مش قابل للقياس في الفترة (منطقة مفيهاش مبيعات مثلًا) بيتشال ووزنه يتوزع على الباقي.</p>
         <p class="muted">80 فأكتر ممتاز · 60–79 جيد · 40–59 متوسط · أقل من 40 محتاج تدخل</p>
       </div>
-      <p class="muted">المبيعات والتحصيلات من قيود خلال الفترة. <b>الأرصدة والمتأخرات لحظية</b> (الوضع الحالي مش خلال الفترة).</p>
+      <p class="muted">المبيعات والمرتجعات والخصم والتحصيلات <b>خلال الفترة</b>.
+      الأرصدة والمتأخرات <b>لحظية</b> (الوضع دلوقتي).</p>
     `}`;
 }
 
@@ -3250,15 +3281,19 @@ A.exportRegions = () => {
   downloadCsv('أداء_المناطق_' + (r.from || 'من_البداية') + '_' + (r.to || 'للنهارده'),
     (r.rows || []).map(x => ({
       'المنطقة': x.name, 'المناديب': x.reps.join('، '), 'عدد العملاء': x.activeCustomers,
-      'إجمالي المبيعات': x.grossSales, 'المرتجعات': x.returns, 'صافي المبيعات': x.netSales,
-      '% من إجمالي المبيعات': x.salesShare, 'التحصيلات': x.collected,
-      '% من إجمالي التحصيلات': x.collectedShare,
-      'نسبة التحصيل للمبيعات': x.collectionRate === null ? '' : x.collectionRate,
+      'المبيعات شامل الضريبة': x.grossSales,
+      'الضريبة': x.tax, 'المبيعات قبل الضريبة': x.salesBeforeVat,
+      'الخصم': x.discount, 'نسبة الخصم %': x.discountRate === null ? '' : x.discountRate,
+      'المرتجعات': x.returns, 'نسبة المرتجعات %': x.returnRate === null ? '' : x.returnRate,
+      'صافي المبيعات': x.netSales, '% من إجمالي المبيعات': x.salesShare,
+      'التحصيلات': x.collected, '% من إجمالي التحصيلات': x.collectedShare,
+      'نسبة التحصيل %': x.collectionRate === null ? '' : x.collectionRate,
       'تحصيلات لسه مترحّلتش': x.pendingCollections,
       'الرصيد': x.balance, 'المتأخرات': x.overdue,
-      'نسبة المتأخرات': x.overdueRate === null ? '' : x.overdueRate,
+      'نسبة المتأخرات %': x.overdueRate === null ? '' : x.overdueRate,
       'الزيارات': x.visits, 'عملاء اتزاروا': x.covered,
       'التغطية %': x.coverage === null ? '' : x.coverage,
+      'فواتير تفاصيلها ناقصة': x.noDetail,
       'الدرجة': x.score === null ? '' : x.score, 'التقييم': x.rating
     })));
 };
@@ -3660,6 +3695,25 @@ function adSettings() {
       <div class="flex mt">
         <button class="btn ghost sm" onclick="A.previewReceipt()">👁 شوف شكل سند القبض</button>
       </div>
+      <div class="card mt" style="background:var(--amber-soft)">
+        <b>📐 أوزان تقييم المناطق</b>
+        <p class="muted">بتتحكم في التقييم اللي بيطلع في تقرير أداء المناطق. المجموع بيتظبط تلقائي.</p>
+        <div class="grid2">
+          <div><label>وزن نسبة التحصيل</label><input id="s-w-coll" type="text" inputmode="numeric" value="${esc(s.SCORE_W_COLLECTION || '35')}"></div>
+          <div><label>وزن المرتجعات</label><input id="s-w-ret" type="text" inputmode="numeric" value="${esc(s.SCORE_W_RETURNS || '20')}"></div>
+        </div>
+        <div class="grid2">
+          <div><label>وزن الخصم</label><input id="s-w-disc" type="text" inputmode="numeric" value="${esc(s.SCORE_W_DISCOUNT || '15')}"></div>
+          <div><label>وزن التغطية</label><input id="s-w-cov" type="text" inputmode="numeric" value="${esc(s.SCORE_W_COVERAGE || '15')}"></div>
+        </div>
+        <div><label>وزن صحة المتأخرات</label><input id="s-w-over" type="text" inputmode="numeric" value="${esc(s.SCORE_W_OVERDUE || '15')}"></div>
+        <div class="section-title" style="margin-bottom:4px"><span>الحدود الحمرا (النسبة اللي عندها العنصر ياخد صفر)</span></div>
+        <div class="grid2">
+          <div><label>نسبة المرتجعات %</label><input id="s-t-ret" type="text" inputmode="numeric" value="${esc(s.TARGET_RETURN_RATE || '5')}"></div>
+          <div><label>نسبة الخصم %</label><input id="s-t-disc" type="text" inputmode="numeric" value="${esc(s.TARGET_DISCOUNT_RATE || '10')}"></div>
+        </div>
+        <div><label>نسبة المتأخرات %</label><input id="s-t-over" type="text" inputmode="numeric" value="${esc(s.TARGET_OVERDUE_RATE || '20')}"></div>
+      </div>
       <div class="card mt" style="background:var(--blue-soft)">
         <b>🔢 ترقيم المستندات المرسلة لقيود</b>
         <p class="muted">كل مستند بيتبعت لقيود بياخد رقم متسلسل بيوضح إنه اتعمل من الـ CRM —
@@ -3792,7 +3846,15 @@ A.saveSettings = async () => {
     SEQ_START: normDigits($('#s-seq-start').value) || '1001',
     SEQ_NEXT_QTE: normDigits($('#s-seq-next-qte').value) || '1001',
     SEQ_NEXT_PYT: normDigits($('#s-seq-next-pyt').value) || '1001',
-    SEQ_NEXT_EXP: normDigits($('#s-seq-next-exp').value) || '1001'
+    SEQ_NEXT_EXP: normDigits($('#s-seq-next-exp').value) || '1001',
+    SCORE_W_COLLECTION: normDigits($('#s-w-coll').value) || '35',
+    SCORE_W_RETURNS: normDigits($('#s-w-ret').value) || '20',
+    SCORE_W_DISCOUNT: normDigits($('#s-w-disc').value) || '15',
+    SCORE_W_COVERAGE: normDigits($('#s-w-cov').value) || '15',
+    SCORE_W_OVERDUE: normDigits($('#s-w-over').value) || '15',
+    TARGET_RETURN_RATE: normDigits($('#s-t-ret').value) || '5',
+    TARGET_DISCOUNT_RATE: normDigits($('#s-t-disc').value) || '10',
+    TARGET_OVERDUE_RATE: normDigits($('#s-t-over').value) || '20'
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
