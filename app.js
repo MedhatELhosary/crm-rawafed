@@ -1358,6 +1358,91 @@ function repName(id) {
   return u ? u.name : '—';
 }
 
+/**
+ * بطاقة التقييم في لوحة المتابعة — من أول الشهر لغاية النهارده،
+ * بنفس أرقام تقرير المناطق وبمقارنة بالفترة السابقة وسنة وسنتين.
+ * بتتحمّل لوحدها أول ما اللوحة تتفتح، ومبتعطّلش باقي الصفحة لو فشلت.
+ */
+function dashScorecard() {
+  const sc = S.scorecard;
+  if (S.scorecardErr) return `<div class="card" style="border-right:4px solid var(--amber)">
+    <b>⭐ التقييم مش متاح دلوقتي</b>
+    <p class="muted">${esc(S.scorecardErr)}</p>
+    <button class="btn sm ghost" onclick="A.loadScorecard(true)">حاول تاني</button></div>`;
+  if (!sc) {
+    setTimeout(() => A.loadScorecard(), 0);
+    return '<div class="card"><b>⭐ بيحسب تقييم الشهر...</b></div>';
+  }
+
+  const t = sc.totals;
+  const cur$ = sc.currency || cur();
+  const pctv = v => v === null || v === undefined ? '—' : v + '%';
+  const cls = v => v === null || v === undefined ? 'gray'
+    : v >= 80 ? 'cool' : v >= 60 ? 'info' : v >= 40 ? 'warm' : 'hot';
+
+  return `
+    <div class="card" style="border-right:4px solid var(--blue)">
+      <div class="flex" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <b style="font-size:15px">⭐ تقييم الشهر لغاية النهارده</b>
+          <div class="muted">${esc(sc.from)} ← ${esc(sc.to)}</div>
+        </div>
+        <span class="badge ${cls(t.score)}" style="font-size:15px;padding:6px 14px">
+          ${t.score === null || t.score === undefined ? esc(t.rating || 'مفيش بيانات') : t.score + ' / 100 — ' + esc(t.rating)}
+        </span>
+      </div>
+
+      <div class="kpi-grid mt">
+        <div class="kpi"><div class="num">${money(t.grossSales)}</div><div class="lbl">المبيعات شامل الضريبة (${esc(cur$)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--green)">${money(t.collected)}</div><div class="lbl">التحصيلات (${pctv(t.collectionRate)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--red)">${money(t.returns)}</div><div class="lbl">المرتجعات (${pctv(t.returnRate)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--amber)">${money(t.discount)}</div><div class="lbl">الخصومات (${pctv(t.discountRate)})</div></div>
+      </div>
+
+      ${(sc.periods && sc.periods.length) ? `<div class="table-wrap mt"><table>
+        <tr><th>مقارنة بـ</th><th>المبيعات</th><th>التحصيلات</th><th>المرتجعات</th><th>الخصومات</th></tr>
+        ${sc.periods.map(p => `<tr>
+          <td><b>${esc(p.label)}</b><div class="muted" style="font-size:10px">${esc(p.from)} ← ${esc(p.to)}</div></td>
+          <td>${money(p.totals.grossSales)}<div>${chgBadge(p.change.grossSales, false)}</div></td>
+          <td>${money(p.totals.collected)}<div>${chgBadge(p.change.collected, false)}</div></td>
+          <td>${money(p.totals.returns)}<div>${chgBadge(p.change.returns, true)}</div></td>
+          <td>${money(p.totals.discount)}<div>${chgBadge(p.change.discount, true)}</div></td>
+        </tr>`).join('')}
+      </table></div>` : ''}
+
+      ${(sc.regions || []).length ? `<div class="table-wrap mt"><table>
+        <tr><th>المنطقة</th><th>التقييم</th><th>المبيعات</th><th>% تحصيل</th><th>مقابل الفترة السابقة</th></tr>
+        ${sc.regions.slice().sort((a, b) => (b.score || 0) - (a.score || 0)).map(g => `<tr>
+          <td><b>${esc(g.name)}</b></td>
+          <td><span class="badge ${cls(g.score)}">${g.score === null || g.score === undefined ? esc(g.rating) : g.score + ' — ' + esc(g.rating)}</span></td>
+          <td>${money(g.grossSales)}</td>
+          <td>${pctv(g.collectionRate)}</td>
+          <td>${chgBadge(g.growthPrev, false)}</td>
+        </tr>`).join('')}
+      </table></div>` : ''}
+
+      <div class="flex mt">
+        <button class="btn sm ghost" onclick="A.adminTab('reports'); A.repTab('regions')">📊 التقرير الكامل</button>
+        <button class="btn sm ghost" onclick="A.loadScorecard(true)">🔄 تحديث</button>
+      </div>
+    </div>`;
+}
+
+A.loadScorecard = async (force) => {
+  if (S.scorecardLoading) return;
+  if (S.scorecard && !force) return;
+  S.scorecardLoading = true;
+  if (force) { S.scorecard = null; S.scorecardErr = ''; render(); }
+  try {
+    const r = await api('scorecard', {});
+    S.scorecard = r; S.scorecardErr = '';
+  } catch (e) {
+    S.scorecardErr = e.msg || 'مش قادر أجيب التقييم دلوقتي';
+  }
+  S.scorecardLoading = false;
+  if (S.adminTab === 'dash') render();
+};
+
 // ----- لوحة المتابعة -----
 function adDash() {
   const customers = S.data.customers || [];
@@ -1378,6 +1463,7 @@ function adDash() {
     .sort((a, b) => Number(b.overdue) - Number(a.overdue)).slice(0, 8);
 
   return `
+    ${dashScorecard()}
     <div class="kpi-grid">
       <div class="kpi"><div class="num">${visitsToday.length}</div><div class="lbl">زيارات اليوم</div></div>
       <div class="kpi"><div class="num">${visitsMonth.length}</div><div class="lbl">زيارات الشهر</div></div>
@@ -1461,9 +1547,13 @@ function adDaily() {
         <div class="kpi"><div class="num">${rep.totals.activeReps}/${rep.totals.totalReps}</div><div class="lbl">مندوب نشط</div></div>
       </div>
       <div class="flex" style="margin-bottom:10px">
-        <button class="btn ghost sm" onclick="A.sendSummaryNow()">📲 ابعتلي التقرير على تليجرام دلوقتي</button>
+        <button class="btn ghost sm" onclick="A.sendSummaryNow()">📲 تقرير اليوم على تليجرام</button>
+        <button class="btn ghost sm" onclick="A.sendMonthNow()">📅 ملخص الشهر على تليجرام</button>
+        <button class="btn ghost sm" onclick="A.sendRepReportsNow()">📝 تقارير المناديب على تليجرام</button>
         <button class="btn amber sm" onclick="A.leaderboard('week')">🏆 ترتيب المناديب</button>
       </div>
+      <p class="muted" style="margin-top:-4px">التلاتة بيتبعتوا لوحدهم كل يوم: تقارير المناديب 7 مساءً،
+      وتقرير اليوم وملخص الشهر 8 مساءً.</p>
       <div class="table-wrap"><table>
         <tr><th>المندوب</th><th>المنطقة</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
         ${rep.reps.map(r => `<tr>
@@ -1596,6 +1686,17 @@ A.followupsAdmin = async () => {
 A.sendSummaryNow = async () => {
   toast('⏳ بجهز التقرير وببعته...');
   try { const r = await api('sendDailySummary', {}); toast(r.message, 'ok'); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.sendMonthNow = async () => {
+  toast('⏳ بجهز ملخص الشهر وببعته...');
+  try { const r = await api('sendMonthSummaryNow', {}); toast(r.message, 'ok'); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.sendRepReportsNow = async () => {
+  toast('⏳ ببعت تقارير المناديب...');
+  try { const r = await api('sendRepReportsNow', { date: (S.daily && S.daily.date) || '' }); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
