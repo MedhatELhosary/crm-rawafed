@@ -3328,11 +3328,18 @@ A.probeInvoices = async () => {
         ${r.dateRange ? '<div class="stat-line"><span>تواريخها</span><b>' + esc(r.dateRange.from) + ' ← ' + esc(r.dateRange.to) + '</b></div>' : ''}
       </div>
 
-      ${r.noLines ? `<div class="card" style="border-right:4px solid var(--amber)">
-        <b>🔧 الحل: نجيب تفاصيلها من قيود واحدة واحدة</b>
+      ${r.badStored ? `<div class="card" style="border-right:4px solid var(--green)">
+        <b>⚡ الحل السريع: نحسبها من تاني</b>
+        <p class="muted">الأرقام المخزنة عندنا كفاية عشان نصلّحها من غير ما نتصل بقيود.
+        بيشتغل في ثواني${r.headerDiscountPattern ? ' — و' + r.headerDiscountPattern + ' فاتورة من دول أرقامها بتقفل بالظبط' : ''}.</p>
+        <button class="btn green full" onclick="A.recomputeInvoices()">احسب التفاصيل من تاني</button>
+      </div>
+
+      <div class="card" style="border-right:4px solid var(--amber)">
+        <b>🔧 لو فضل حاجة: نجيبها من قيود واحدة واحدة</b>
         <p class="muted">قيود ساعات مبيرجّعش بنود الفاتورة في القائمة، لكن بيرجّعها لما نطلب
-        الفاتورة لوحدها. الزرار ده بيعمل كده على دفعات (40 فاتورة في المرة).</p>
-        <button class="btn amber full" onclick="A.backfillInvoices()">جيب تفاصيل الفواتير الناقصة</button>
+        الفاتورة لوحدها. الزرار ده بيعمل كده على دفعات (40 فاتورة في المرة) وبياخد وقت.</p>
+        <button class="btn amber full" onclick="A.backfillInvoices()">جيب تفاصيل الفواتير من قيود</button>
       </div>` : ''}
 
       ${(r.stored || []).length ? `<div class="section-title"><span>الفواتير الناقصة زي ما هي عندنا</span></div>
@@ -3372,6 +3379,18 @@ A.probeInvoices = async () => {
 
       <p class="muted">لو الحل مش واضح من الأرقام دي، ابعتلي صورة من الشاشة.</p>
       <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.recomputeInvoices = async () => {
+  closeModal();
+  toast('⏳ بحسب من تاني...');
+  try {
+    const r = await api('recomputeInvoiceDetails', {});
+    toast(r.message, (r.remaining || r.pending) ? 'warn' : 'ok');
+    if (r.pending > 0) return A.recomputeInvoices();
+    if (r.remaining > 0 && confirm(r.message + '\n\nنجيب الباقي من قيود؟')) return A.backfillInvoices();
+    if (S.rreg) A.loadRegions();
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 

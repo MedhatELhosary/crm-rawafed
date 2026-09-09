@@ -1,7 +1,7 @@
-// Service Worker — بيخلي التطبيق يفتح بدون نت، وبياخد التحديثات فورًا لما يكون فيه نت
-const CACHE = 'crm-rawafed-v44';
+﻿// Service Worker â€” ط¨ظٹط®ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ظٹظپطھط­ ط¨ط¯ظˆظ† ظ†طھطŒ ظˆط¨ظٹط§ط®ط¯ ط§ظ„طھط­ط¯ظٹط«ط§طھ ظپظˆط±ظ‹ط§ ظ„ظ…ط§ ظٹظƒظˆظ† ظپظٹظ‡ ظ†طھ
+const CACHE = 'crm-rawafed-v47';
 
-// ملفات التطبيق نفسه — دي بتتحدث كل شوية
+// ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡ â€” ط¯ظٹ ط¨طھطھط­ط¯ط« ظƒظ„ ط´ظˆظٹط©
 const SHELL = [
   './',
   './index.html',
@@ -10,7 +10,7 @@ const SHELL = [
   './app.js',
   './manifest.json'
 ];
-// ملفات ثابتة نادرًا بتتغير
+// ظ…ظ„ظپط§طھ ط«ط§ط¨طھط© ظ†ط§ط¯ط±ظ‹ط§ ط¨طھطھط؛ظٹط±
 const STATIC = [
   './icon-192.png',
   './icon-512.png',
@@ -34,7 +34,7 @@ self.addEventListener('activate', e => {
   );
 });
 
-/** بيجيب من النت وبيحدّث الكاش، وبيستسلم بعد مهلة عشان الشبكة الضعيفة متعطلش التطبيق */
+/** ط¨ظٹط¬ظٹط¨ ظ…ظ† ط§ظ„ظ†طھ ظˆط¨ظٹط­ط¯ظ‘ط« ط§ظ„ظƒط§ط´طŒ ظˆط¨ظٹط³طھط³ظ„ظ… ط¨ط¹ط¯ ظ…ظ‡ظ„ط© ط¹ط´ط§ظ† ط§ظ„ط´ط¨ظƒط© ط§ظ„ط¶ط¹ظٹظپط© ظ…طھط¹ط·ظ„ط´ ط§ظ„طھط·ط¨ظٹظ‚ */
 function fromNetwork(request, timeoutMs) {
   return new Promise(resolve => {
     let done = false;
@@ -57,11 +57,11 @@ function fromNetwork(request, timeoutMs) {
 
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return;                      // طلبات الـ API متتكاشش
+  if (req.method !== 'GET') return;                      // ط·ظ„ط¨ط§طھ ط§ظ„ظ€ API ظ…طھطھظƒط§ط´ط´
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // ملفات التطبيق: النت الأول (عشان التحديث ينزل فورًا) والكاش احتياطي
+  // ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚: ط§ظ„ظ†طھ ط§ظ„ط£ظˆظ„ (ط¹ط´ط§ظ† ط§ظ„طھط­ط¯ظٹط« ظٹظ†ط²ظ„ ظپظˆط±ظ‹ط§) ظˆط§ظ„ظƒط§ط´ ط§ط­طھظٹط§ط·ظٹ
   const isShell = sameOrigin && (
     req.mode === 'navigate' ||
     /\.(html|js|css|json)$/.test(url.pathname) ||
@@ -75,10 +75,10 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // الباقي (صور، خرايط): الكاش الأول وأسرع
+  // ط§ظ„ط¨ط§ظ‚ظٹ (طµظˆط±طŒ ط®ط±ط§ظٹط·): ط§ظ„ظƒط§ط´ ط§ظ„ط£ظˆظ„ ظˆط£ط³ط±ط¹
   e.respondWith(
     caches.match(req).then(cached => {
-      if (cached) { fromNetwork(req, 8000); return cached; }   // بيتحدث في الخلفية
+      if (cached) { fromNetwork(req, 8000); return cached; }   // ط¨ظٹطھط­ط¯ط« ظپظٹ ط§ظ„ط®ظ„ظپظٹط©
       return fromNetwork(req, 8000).then(r => r || cached);
     })
   );
