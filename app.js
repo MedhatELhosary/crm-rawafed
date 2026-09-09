@@ -998,7 +998,7 @@ function viewMine() {
       ? (cols.length ? cols.map(c => `<div class="cust-card" style="padding:11px 13px">
           <div class="cust-head">
             <div><div class="cust-name" style="font-size:14.5px">${esc(c.customer_name)}</div>
-              <div class="cust-meta">${c.voucher ? 'سند ' + esc(c.voucher) + ' • ' : ''}${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
+              <div class="cust-meta">${c.voucher ? 'سند ' + esc(c.voucher) + ' • ' : ''}${c.ref_no ? esc(c.ref_no) + ' • ' : ''}${esc(String(c.date).slice(0, 10))} ${esc(c.time || '')} • ${esc(c.method)}
                 ${c.reference ? '• ' + esc(c.reference) : ''}</div></div>
             <div style="text-align:left"><b class="pos">${money(c.amount)}</b>
               <div>${c.status === 'مرسل' ? '<span class="badge cool">اتسجل</span>'
@@ -1622,9 +1622,10 @@ function adSales() {
     </div>
     ${sub === 'bank' ? adBank() : sub === 'journal' ? adExpJournal() : sub === 'expenses' ? adExpenses() : sub === 'orders' ? `
       <div class="table-wrap"><table>
-        <tr><th>التاريخ</th><th>العميل</th><th>المندوب</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+        <tr><th>التاريخ</th><th>مرجع CRM</th><th>العميل</th><th>المندوب</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
         ${orders.map(o => `<tr>
           <td>${esc(String(o.date).slice(0, 10))} <span class="muted">${esc(o.time || '')}</span></td>
+          <td style="direction:ltr;text-align:right">${o.ref_no ? '<b>' + esc(o.ref_no) + '</b>' : '<span class="muted">—</span>'}</td>
           <td><b>${esc(o.customer_name)}</b></td>
           <td>${esc(o.rep_name)}</td>
           <td>${o.items_count}</td>
@@ -1633,7 +1634,7 @@ function adSales() {
           <td style="white-space:nowrap">
             <button class="btn sm ghost" onclick="A.orderView('${o.id}')">تفاصيل</button>
             ${o.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushOrder('${o.id}')">📤 ابعت</button>` : ''}
-          </td></tr>`).join('') || '<tr><td colspan="7" class="muted">مفيش طلبات لسه</td></tr>'}
+          </td></tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش طلبات لسه</td></tr>'}
       </table></div>`
     : sub === 'collections' ? `
       ${(d.byMethod || []).length ? `<div class="kpi-grid">
@@ -1644,10 +1645,11 @@ function adSales() {
         </div>`).join('')}
       </div>` : ''}
       <div class="table-wrap"><table>
-        <tr><th>التاريخ</th><th>سند رقم</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
+        <tr><th>التاريخ</th><th>سند رقم</th><th>مرجع CRM</th><th>العميل</th><th>المندوب</th><th>المبلغ</th><th>الطريقة</th><th>المرجع</th><th>الحالة</th><th>العهدة</th><th></th></tr>
         ${cols.map(c => `<tr>
           <td>${esc(String(c.date).slice(0, 10))} <span class="muted">${esc(c.time || '')}</span></td>
           <td><b>${esc(c.voucher || '—')}</b></td>
+          <td style="direction:ltr;text-align:right">${c.ref_no ? '<b>' + esc(c.ref_no) + '</b>' : '<span class="muted">—</span>'}</td>
           <td><b>${esc(c.customer_name)}</b></td>
           <td>${esc(c.rep_name)}</td>
           <td><b style="color:var(--green)">${money(c.amount)}</b></td>
@@ -1664,7 +1666,7 @@ function adSales() {
               : '<span class="muted" style="font-size:11px">مفيش سند</span>'}
             ${c.status !== 'مرسل' ? `<button class="btn sm" onclick="A.pushCollection('${c.id}')">📤 ابعت</button>` : ''}
           </td>
-        </tr>`).join('') || '<tr><td colspan="10" class="muted">مفيش تحصيلات لسه</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="11" class="muted">مفيش تحصيلات لسه</td></tr>'}
       </table></div>`
     : `
       <div class="table-wrap"><table>
@@ -1773,7 +1775,7 @@ function adExpenses() {
           <td><span class="badge info">${esc(e.category)}</span></td>
           <td><b class="neg">${money(e.amount)}</b></td>
           <td>${esc(e.description || '')}</td>
-          <td>${e.pushStatus === 'مرحّل' ? '<span class="badge cool">قيد ' + esc(e.entryId) + '</span>'
+          <td>${e.pushStatus === 'مرحّل' ? '<span class="badge cool">' + esc(e.journalRef || ('قيد ' + e.entryId)) + '</span>'
                 : e.pushStatus === 'فشل' ? '<span class="badge hot">فشل</span>'
                 : '<span class="badge gray">لسه</span>'}</td>
           <td>${e.settled ? '<span class="badge cool">اتورد ' + esc(e.settledDate) + '</span>'
@@ -1809,7 +1811,8 @@ A.exportExpenses = () => {
     'التاريخ': e.date, 'الوقت': e.time, 'رقم السند': e.voucher || '',
     'المندوب': e.rep_name, 'النوع': e.category,
     'المبلغ': e.amount, 'البيان': e.description,
-    'قيد قيود': e.pushStatus === 'مرحّل' ? e.entryId : (e.pushStatus || 'لسه'),
+    'مرجع القيد': e.journalRef || '',
+    'رقم القيد في قيود': e.pushStatus === 'مرحّل' ? e.entryId : (e.pushStatus || 'لسه'),
     'حالة التوريد': e.settled ? 'اتورد ' + e.settledDate : 'مفتوح'
   }));
   downloadCsv('تقرير_المصروفات_' + (S.exp.from || 'من_البداية') + '_' + (S.exp.to || 'للنهارده'), rows);
@@ -1993,6 +1996,7 @@ function renderExpjPreview(s) {
   openModal(`
     <h2>👁 معاينة القيد قبل الترحيل</h2>
     <p class="modal-sub">${esc(s.date)} — ${s.count} سند</p>
+    <p class="muted">المرجع في قيود هياخد أول رقم متاح في تسلسل المصروفات (${esc(String(s.ref || '').replace(/_+$/, 'xxxx'))})</p>
     <div class="card">
       <div class="stat-line"><span>إجمالي المصروفات</span><b>${money(s.totalGross)} ${esc(s.currency)}</b></div>
       <div class="stat-line"><span>منها صافي</span><b>${money(s.totalNet)}</b></div>
@@ -3401,6 +3405,30 @@ function adSettings() {
       <div class="flex mt">
         <button class="btn ghost sm" onclick="A.previewReceipt()">👁 شوف شكل سند القبض</button>
       </div>
+      <div class="card mt" style="background:var(--blue-soft)">
+        <b>🔢 ترقيم المستندات المرسلة لقيود</b>
+        <p class="muted">كل مستند بيتبعت لقيود بياخد رقم متسلسل بيوضح إنه اتعمل من الـ CRM —
+        عشان تفرقه عن اللي اتعمل من قيود نفسه. مثال: <b style="direction:ltr">CRM-PYT1005</b></p>
+        <div class="grid2">
+          <div><label>البادئة</label><input id="s-seq-prefix" value="${esc(s.SEQ_PREFIX === undefined ? 'CRM-' : s.SEQ_PREFIX)}" style="direction:ltr"></div>
+          <div><label>عدد خانات الرقم</label><input id="s-seq-pad" type="text" inputmode="numeric" value="${esc(s.SEQ_PAD || '4')}"></div>
+        </div>
+        <div class="grid2">
+          <div><label>كود عروض الأسعار</label><input id="s-seq-qte" value="${esc(s.SEQ_CODE_QUOTE || 'QTE')}" style="direction:ltr"></div>
+          <div><label>كود سندات القبض</label><input id="s-seq-pyt" value="${esc(s.SEQ_CODE_RECEIPT || 'PYT')}" style="direction:ltr"></div>
+        </div>
+        <div class="grid2">
+          <div><label>كود قيود المصروفات</label><input id="s-seq-exp" value="${esc(s.SEQ_CODE_EXPENSE || 'EXP')}" style="direction:ltr"></div>
+          <div><label>أول رقم في التسلسل</label><input id="s-seq-start" type="text" inputmode="numeric" value="${esc(s.SEQ_START || '1001')}"></div>
+        </div>
+        <div class="section-title" style="margin-bottom:4px"><span>الرقم الجاي في كل تسلسل</span></div>
+        <div class="grid2">
+          <div><label>عروض الأسعار</label><input id="s-seq-next-qte" type="text" inputmode="numeric" value="${esc(s.SEQ_NEXT_QTE || s.SEQ_START || '1001')}"></div>
+          <div><label>سندات القبض</label><input id="s-seq-next-pyt" type="text" inputmode="numeric" value="${esc(s.SEQ_NEXT_PYT || s.SEQ_START || '1001')}"></div>
+        </div>
+        <div><label>قيود المصروفات</label><input id="s-seq-next-exp" type="text" inputmode="numeric" value="${esc(s.SEQ_NEXT_EXP || s.SEQ_START || '1001')}"></div>
+        <p class="muted mt">⚠️ متغيّرش الأرقام الجاية دي غير لو انت عارف بتعمل إيه — لو رجّعتها لورا هيتكرر رقم على مستندين.</p>
+      </div>
       <p class="muted">السند ده اللي العميل هيوقّع عليه وهيتحفظ بالصورة — شوفه قبل ما تسلّم النظام للمناديب.</p>
     </div>
     <div class="card">
@@ -3500,7 +3528,16 @@ A.saveSettings = async () => {
     CREDIT_BLOCK: $('#s-credit-block').checked ? 'TRUE' : 'FALSE',
     CREDIT_BLOCK_OVERDUE: $('#s-credit-overdue').checked ? 'TRUE' : 'FALSE',
     MAX_VISIT_PHOTOS: $('#s-max-photos').value,
-    SYNC_DELETE_MISSING: $('#s-sync-del').checked ? 'TRUE' : 'FALSE'
+    SYNC_DELETE_MISSING: $('#s-sync-del').checked ? 'TRUE' : 'FALSE',
+    SEQ_PREFIX: $('#s-seq-prefix').value,
+    SEQ_PAD: normDigits($('#s-seq-pad').value) || '4',
+    SEQ_CODE_QUOTE: $('#s-seq-qte').value.trim() || 'QTE',
+    SEQ_CODE_RECEIPT: $('#s-seq-pyt').value.trim() || 'PYT',
+    SEQ_CODE_EXPENSE: $('#s-seq-exp').value.trim() || 'EXP',
+    SEQ_START: normDigits($('#s-seq-start').value) || '1001',
+    SEQ_NEXT_QTE: normDigits($('#s-seq-next-qte').value) || '1001',
+    SEQ_NEXT_PYT: normDigits($('#s-seq-next-pyt').value) || '1001',
+    SEQ_NEXT_EXP: normDigits($('#s-seq-next-exp').value) || '1001'
   };
   if (A._newLogo !== undefined) data.COMPANY_LOGO = A._newLogo;
   try {
