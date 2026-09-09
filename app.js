@@ -3122,9 +3122,11 @@ function adReports() {
     <div class="pill-row">
       <button class="pill ${sub === 'visits' ? 'active' : ''}" onclick="A.repTab('visits')">📍 الزيارات</button>
       <button class="pill ${sub === 'regions' ? 'active' : ''}" onclick="A.repTab('regions')">🗺️ أداء المناطق</button>
+      <button class="pill ${sub === 'customers' ? 'active' : ''}" onclick="A.repTab('customers')">👥 تفصيلي العملاء</button>
       <button class="pill ${sub === 'files' ? 'active' : ''}" onclick="A.repTab('files')">📄 تصدير البيانات</button>
     </div>
-    ${sub === 'regions' ? adRegions() : sub === 'files' ? adExportFiles() : adVisitsReport()}`;
+    ${sub === 'regions' ? adRegions() : sub === 'customers' ? adCustReport()
+      : sub === 'files' ? adExportFiles() : adVisitsReport()}`;
 }
 A.repTab = t => { S.repTab = t; render(); window.scrollTo(0, 0); };
 
@@ -3166,6 +3168,8 @@ function adRegions() {
         <div><label>من تاريخ</label><input type="date" id="rg-from" value="${esc((r && r.from) || monthStart)}"></div>
         <div><label>إلى تاريخ</label><input type="date" id="rg-to" value="${esc((r && r.to) || today)}"></div>
       </div>
+      <label><input type="checkbox" id="rg-cmp" ${S.rregCmp ? 'checked' : ''} style="width:auto">
+        قارن بالفترة السابقة ونفس الفترة من سنة ومن سنتين</label>
       <div class="flex mt">
         <button class="btn" onclick="A.loadRegions()">عرض التقرير</button>
         <button class="btn ghost" onclick="A.quickReg('month')">الشهر ده</button>
@@ -3180,6 +3184,31 @@ function adRegions() {
         <p class="muted">عشان المبيعات تبقى قابلة للمقارنة بالتحصيل — العميل بيدفع المبلغ شامل الضريبة.
         الضريبة والخصم معروضين لوحدهم تحت.</p>
       </div>
+
+      ${(r.periods && r.periods.length) ? `<div class="card" style="border-right:4px solid var(--blue)">
+        <b>📊 مقارنة الفترات</b>
+        <p class="muted">الفترة الحالية: ${esc(r.from)} ← ${esc(r.to)}</p>
+        <div class="table-wrap"><table>
+          <tr><th>البند</th><th>الفترة الحالية</th>
+            ${r.periods.map(p => `<th>${esc(p.label)}<div class="muted" style="font-weight:400;font-size:10px">${esc(p.from)} ← ${esc(p.to)}</div></th>`).join('')}
+          </tr>
+          ${[['المبيعات شامل الضريبة', 'grossSales', false],
+             ['المرتجعات', 'returns', true],
+             ['الخصومات', 'discount', true],
+             ['صافي المبيعات', 'netSales', false],
+             ['التحصيلات', 'collected', false]].map(([lbl, k, lower]) => `<tr>
+            <td><b>${lbl}</b></td>
+            <td><b>${money(r.totals[k])}</b></td>
+            ${r.periods.map(p => `<td>${money(p.totals[k])}<div>${chgBadge(p.change[k], lower)}</div></td>`).join('')}
+          </tr>`).join('')}
+          <tr><td><b>نسبة التحصيل</b></td>
+            <td><b>${pct(r.totals.collectionRate)}</b></td>
+            ${r.periods.map(p => `<td>${pct(p.totals.collectionRate)}<div>${ptsBadge(p.change.collectionRate)}</div></td>`).join('')}
+          </tr>
+        </table></div>
+        <p class="muted mt">السهم الأخضر = اتجاه كويس. المرتجعات والخصومات لما بيزيدوا بيطلعوا أحمر
+        لأن زيادتهم مش في صالحك.</p>
+      </div>` : ''}
 
       <div class="kpi-grid">
         <div class="kpi"><div class="num">${money(r.totals.grossSales)}</div><div class="lbl">إجمالي المبيعات شامل الضريبة (${esc(cur$)})</div></div>
@@ -3199,7 +3228,8 @@ function adRegions() {
       ${r.totals.noDetail ? `<div class="card" style="border-right:4px solid var(--amber)">
         <b>⚠️ ${r.totals.noDetail} فاتورة تفاصيلها مش مكتملة</b>
         <p class="muted">قيود مرجّعش بنودها أو الأرقام مش مطابقة، فالضريبة والخصم بتاعها مش داخلة في الأرقام فوق.
-        الإجمالي والتحصيل مظبوطين برضه.</p></div>` : ''}
+        الإجمالي والتحصيل مظبوطين برضه.</p>
+        <button class="btn sm ghost mt" onclick="A.probeInvoices()">🔬 اعرفلي ليه</button></div>` : ''}
       ${r.totals.pendingCollections ? `<div class="card" style="border-right:4px solid var(--amber)">
         <b>ℹ️ ${money(r.totals.pendingCollections)} ${esc(cur$)} تحصيلات مسجلة عندنا ولسه مترحّلتش لقيود</b>
         <p class="muted">الأرقام فوق من قيود — فالمبلغ ده لسه مش داخل فيها.</p></div>` : ''}
@@ -3213,7 +3243,7 @@ function adRegions() {
             <th>المرتجعات</th><th>% مرتجع</th>
             <th>الخصم</th><th>% خصم</th>
             <th>صافي المبيعات</th><th>التحصيلات</th><th>% تحصيل</th>
-            <th>المتأخرات</th><th>التغطية</th><th>التقييم</th></tr>
+            <th>المتأخرات</th><th>التغطية</th><th>التقييم</th>${(r.periods && r.periods.length) ? r.periods.map(p => '<th>مقابل ' + esc(p.label) + '</th>').join('') : ''}</tr>
         ${r.rows.map(x => `<tr>
           <td><b>${esc(x.name)}</b>${x.reps.length ? '<div class="muted" style="font-size:11px">' + esc(x.reps.join('، ')) + '</div>' : ''}</td>
           <td>${x.activeCustomers}</td>
@@ -3229,6 +3259,12 @@ function adRegions() {
           <td>${x.overdue ? '<span class="neg">' + money(x.overdue) + '</span><div class="muted" style="font-size:10px">' + pct(x.overdueRate) + '</div>' : '—'}</td>
           <td>${x.coverage === null ? '—' : x.coverage + '%<div class="muted" style="font-size:10px">' + x.covered + '/' + x.activeCustomers + '</div>'}</td>
           <td>${scoreBadge(x)}</td>
+          ${(r.periods && r.periods.length) ? r.periods.map(p => {
+            const pv = (x.periods || {})[p.key];
+            return '<td>' + (pv
+              ? money(pv.grossSales) + '<div>' + chgBadge(pv.changeSales, false) + '</div>'
+              : '<span class="muted">مفيش</span>') + '</td>';
+          }).join('') : ''}
         </tr>`).join('') || '<tr><td colspan="14" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
         <tr style="background:var(--blue-soft)">
           <td><b>الإجمالي</b></td><td><b>${r.totals.customers}</b></td>
@@ -3238,6 +3274,7 @@ function adRegions() {
           <td><b>${money(r.totals.netSales)}</b></td>
           <td><b>${money(r.totals.collected)}</b></td><td><b>${pct(r.totals.collectionRate)}</b></td>
           <td><b>${money(r.totals.overdue)}</b></td><td>—</td><td>—</td>
+          ${(r.periods && r.periods.length) ? r.periods.map(p => '<td><b>' + money(p.totals.grossSales) + '</b></td>').join('') : ''}
         </tr>
       </table></div>
 
@@ -3258,8 +3295,192 @@ function adRegions() {
     `}`;
 }
 
+/** شارة نسبة التغيير — lowerIsBetter للمرتجعات والخصم */
+function chgBadge(v, lowerIsBetter) {
+  if (v === null || v === undefined) return '<span class="muted">جديد</span>';
+  if (v === 0) return '<span class="badge gray">ثابت</span>';
+  const up = v > 0;
+  const goodNews = lowerIsBetter ? !up : up;
+  return '<span class="badge ' + (goodNews ? 'cool' : 'hot') + '">' +
+         (up ? '▲ ' : '▼ ') + Math.abs(v) + '%</span>';
+}
+/** شارة فرق النقاط (للنِسب والتقييم) */
+function ptsBadge(v) {
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  if (v === 0) return '<span class="badge gray">ثابت</span>';
+  return '<span class="badge ' + (v > 0 ? 'cool' : 'hot') + '">' +
+         (v > 0 ? '▲ +' : '▼ ') + v + '</span>';
+}
+
+A.probeInvoices = async () => {
+  toast('⏳ بجيب عينة من قيود...');
+  try {
+    const r = await api('invoiceDetailProbe', {});
+    if (!r.ok) return toast(r.error || 'خطأ', 'err');
+    openModal(`
+      <h2>🔬 ليه تفاصيل الفواتير ناقصة؟</h2>
+      <p class="modal-sub">فحصنا ${r.summary.checked} فاتورة: ${r.summary.ok} مطابقة ·
+        ${r.summary.bad} مش مطابقة · ${r.summary.noLines} من غير بنود</p>
+      ${(r.samples || []).map(x => `<div class="card" style="border-right:4px solid ${x.ok ? 'var(--green)' : 'var(--red)'}">
+        <b>${x.ok ? '✅' : '❌'} فاتورة ${esc(String(x.number))}</b>
+        <div class="stat-line"><span>إجمالي قيود</span><b>${money(x.total)}</b></div>
+        <div class="stat-line"><span>حسابنا (صافي + ضريبة)</span><b>${money(x.computed.sum)}</b></div>
+        <div class="stat-line"><span>الفرق</span><b class="${Math.abs(x.total - x.computed.sum) > 1 ? 'neg' : 'pos'}">${money(x.total - x.computed.sum)}</b></div>
+        <div class="stat-line"><span>خصم على الفاتورة كلها</span><b>${esc(String(x.headerDiscount))}</b></div>
+        <div class="stat-line"><span>عدد البنود</span><b>${x.lineCount}</b></div>
+        <div class="table-wrap mt"><table>
+          <tr><th>كمية</th><th>سعر</th><th>خصم مبلغ</th><th>خصم %</th><th>ضريبة %</th><th>إجمالي البند</th></tr>
+          ${x.lines.map(l => `<tr>
+            <td>${esc(String(l.qty))}</td><td>${esc(String(l.price))}</td>
+            <td>${esc(String(l.discount_amount))}</td><td>${esc(String(l.discount_percent))}</td>
+            <td>${esc(String(l.tax_percent))}</td><td>${esc(String(l.line_total))}</td>
+          </tr>`).join('')}
+        </table></div>
+        <p class="muted" style="font-size:11px;direction:ltr;text-align:left">${esc(x.allFields)}</p>
+      </div>`).join('')}
+      <p class="muted">ابعتلي صورة من الشاشة دي وأنا أظبط الحساب على الشكل اللي عندك.</p>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ================== تقرير العملاء التفصيلي ==================
+function adCustReport() {
+  const r = S.crep;
+  const today = todayISO();
+  const monthStart = today.slice(0, 8) + '01';
+  const regions = (r && r.regions) || (S.data.regions || []);
+  const cur$ = (r && r.currency) || cur();
+  const pct = v => v === null || v === undefined ? '—' : v + '%';
+  const good = (v, hi, mid) => v === null ? '<span class="muted">—</span>'
+    : '<span class="badge ' + (v >= hi ? 'cool' : v >= mid ? 'warm' : 'hot') + '">' + v + '%</span>';
+  return `
+    <div class="card">
+      <h3>👥 تفصيلي العملاء</h3>
+      <div class="grid2">
+        <div><label>من تاريخ</label><input type="date" id="cr-from" value="${esc((r && r.from) || monthStart)}"></div>
+        <div><label>إلى تاريخ</label><input type="date" id="cr-to" value="${esc((r && r.to) || today)}"></div>
+      </div>
+      <div class="grid2">
+        <div><label>المنطقة</label>
+          <select id="cr-region"><option value="">كل المناطق</option>
+            ${regions.map(g => `<option value="${esc(g.id)}" ${S.crepRegion === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+          </select></div>
+        <div><label>الترتيب حسب</label>
+          <select id="cr-sort">
+            ${[['grossSales', 'المبيعات'], ['collected', 'التحصيلات'], ['overdue', 'المتأخرات'],
+               ['balance', 'الرصيد'], ['returns', 'المرتجعات'], ['visits', 'الزيارات']].map(o =>
+              `<option value="${o[0]}" ${(S.crepSort || 'grossSales') === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}
+          </select></div>
+      </div>
+      <label>بحث (اسم أو تليفون)</label>
+      <input id="cr-q" value="${esc(S.crepQ || '')}" placeholder="اكتب اسم العميل">
+      <div class="flex mt">
+        <label><input type="checkbox" id="cr-overdue" ${S.crepOverdue ? 'checked' : ''} style="width:auto"> اللي عليهم متأخرات بس</label>
+        <label><input type="checkbox" id="cr-inactive" ${S.crepInactive ? 'checked' : ''} style="width:auto"> اللي متزاروش في الفترة</label>
+      </div>
+      <button class="btn full mt" onclick="A.loadCustReport()">عرض التقرير</button>
+    </div>
+
+    ${!r ? '<div class="empty"><div class="big">👥</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">${r.totals.customers}</div><div class="lbl">عميل</div></div>
+        <div class="kpi"><div class="num">${money(r.totals.grossSales)}</div><div class="lbl">المبيعات شامل الضريبة</div></div>
+        <div class="kpi"><div class="num" style="color:var(--green)">${money(r.totals.collected)}</div><div class="lbl">التحصيلات</div></div>
+        <div class="kpi"><div class="num">${pct(r.totals.collectionRate)}</div><div class="lbl">نسبة التحصيل</div></div>
+        <div class="kpi"><div class="num" style="color:var(--red)">${money(r.totals.returns)}</div><div class="lbl">المرتجعات (${pct(r.totals.returnRate)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--amber)">${money(r.totals.discount)}</div><div class="lbl">الخصومات (${pct(r.totals.discountRate)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--red)">${money(r.totals.overdue)}</div><div class="lbl">المتأخرات</div></div>
+        <div class="kpi"><div class="num">${r.totals.visits}</div><div class="lbl">الزيارات</div></div>
+      </div>
+
+      <div class="section-title"><span>العملاء (${r.rows.length}${r.truncated ? ' من ' + r.matched : ''})</span>
+        <button class="btn sm ghost" onclick="A.exportCustReport()">⬇️ تنزيل Excel</button></div>
+      <div class="table-wrap"><table>
+        <tr><th>العميل</th><th>المنطقة</th><th>فواتير</th>
+            <th>المبيعات<br><span style="font-weight:400;font-size:10px">شامل الضريبة</span></th>
+            <th>الخصم</th><th>المرتجعات</th><th>صافي</th>
+            <th>التحصيلات</th><th>% تحصيل</th>
+            <th>الرصيد</th><th>المتأخر</th><th>أعمار الدين</th>
+            <th>زيارات</th><th>آخر زيارة</th><th>آخر دفعة</th></tr>
+        ${r.rows.map(x => `<tr>
+          <td><b>${esc(x.name)}</b>${x.phone ? '<div class="muted" style="font-size:11px">' + esc(x.phone) + '</div>' : ''}</td>
+          <td>${esc(x.region)}</td>
+          <td>${x.invoices || '—'}</td>
+          <td><b>${money(x.grossSales)}</b>${x.tax ? '<div class="muted" style="font-size:10px">ضريبة ' + money(x.tax) + '</div>' : ''}</td>
+          <td>${x.discount ? money(x.discount) + '<div class="muted" style="font-size:10px">' + pct(x.discountRate) + '</div>' : '—'}</td>
+          <td class="neg">${x.returns ? money(x.returns) + '<div class="muted" style="font-size:10px">' + pct(x.returnRate) + '</div>' : '—'}</td>
+          <td>${money(x.netSales)}</td>
+          <td class="pos"><b>${money(x.collected)}</b></td>
+          <td>${good(x.collectionRate, 90, 60)}</td>
+          <td>${money(x.balance)}</td>
+          <td>${x.overdue ? '<span class="neg"><b>' + money(x.overdue) + '</b></span><div class="muted" style="font-size:10px">' + pct(x.overdueRate) + '</div>' : '—'}</td>
+          <td style="font-size:10px;white-space:nowrap">
+            ${x.aging30 ? '<div>1-30: ' + money(x.aging30) + '</div>' : ''}
+            ${x.aging60 ? '<div>31-60: ' + money(x.aging60) + '</div>' : ''}
+            ${x.aging90 ? '<div>61-90: ' + money(x.aging90) + '</div>' : ''}
+            ${x.aging90p ? '<div class="neg">+90: ' + money(x.aging90p) + '</div>' : ''}
+            ${!(x.aging30 || x.aging60 || x.aging90 || x.aging90p) ? '—' : ''}</td>
+          <td>${x.visits || '<span class="badge hot">0</span>'}</td>
+          <td style="font-size:11px">${x.lastVisitEver ? esc(x.lastVisitEver) + '<div class="muted">' + (x.daysSinceVisit !== null ? 'من ' + x.daysSinceVisit + ' يوم' : '') + '</div>' : '<span class="muted">عمره ما اتزار</span>'}</td>
+          <td style="font-size:11px">${x.lastPayment ? esc(x.lastPayment) + '<div class="muted">' + (x.daysSincePayment !== null ? 'من ' + x.daysSincePayment + ' يوم' : '') + '</div>' : '<span class="muted">—</span>'}</td>
+        </tr>`).join('') || '<tr><td colspan="15" class="muted">مفيش عملاء بالمواصفات دي</td></tr>'}
+        <tr style="background:var(--blue-soft)">
+          <td><b>الإجمالي</b></td><td>—</td><td>—</td>
+          <td><b>${money(r.totals.grossSales)}</b></td>
+          <td><b>${money(r.totals.discount)}</b></td>
+          <td><b>${money(r.totals.returns)}</b></td>
+          <td><b>${money(r.totals.netSales)}</b></td>
+          <td><b>${money(r.totals.collected)}</b></td>
+          <td><b>${pct(r.totals.collectionRate)}</b></td>
+          <td><b>${money(r.totals.balance)}</b></td>
+          <td><b>${money(r.totals.overdue)}</b></td>
+          <td>—</td><td><b>${r.totals.visits}</b></td><td>—</td><td>—</td>
+        </tr>
+      </table></div>
+      ${r.truncated ? '<p class="muted">معروض أول 500 عميل — ضيّق البحث أو نزّل الملف.</p>' : ''}
+      <p class="muted">المبيعات والتحصيلات <b>خلال الفترة</b> · الرصيد والمتأخرات وأعمار الدين <b>لحظية</b>.</p>
+    `}`;
+}
+
+A.loadCustReport = async () => {
+  const payload = {
+    from: ($('#cr-from') || {}).value || '', to: ($('#cr-to') || {}).value || '',
+    region_id: ($('#cr-region') || {}).value || '', sort: ($('#cr-sort') || {}).value || 'grossSales',
+    q: ($('#cr-q') || {}).value || '',
+    onlyOverdue: ($('#cr-overdue') || {}).checked || false,
+    onlyInactive: ($('#cr-inactive') || {}).checked || false
+  };
+  S.crepRegion = payload.region_id; S.crepSort = payload.sort; S.crepQ = payload.q;
+  S.crepOverdue = payload.onlyOverdue; S.crepInactive = payload.onlyInactive;
+  toast('⏳ بجهز التقرير...');
+  try { S.crep = await api('customersReport', payload); render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.exportCustReport = () => {
+  const r = S.crep;
+  if (!r) return;
+  downloadCsv('تفصيلي_العملاء_' + (r.from || 'من_البداية') + '_' + (r.to || 'للنهارده'),
+    (r.rows || []).map(x => ({
+      'العميل': x.name, 'التليفون': x.phone, 'المنطقة': x.region, 'المندوب': x.reps,
+      'عدد الفواتير': x.invoices,
+      'المبيعات شامل الضريبة': x.grossSales, 'الضريبة': x.tax,
+      'الخصم': x.discount, 'نسبة الخصم %': x.discountRate === null ? '' : x.discountRate,
+      'المرتجعات': x.returns, 'نسبة المرتجعات %': x.returnRate === null ? '' : x.returnRate,
+      'صافي المبيعات': x.netSales, 'التحصيلات': x.collected,
+      'نسبة التحصيل %': x.collectionRate === null ? '' : x.collectionRate,
+      'الرصيد': x.balance, 'المتأخر': x.overdue,
+      'نسبة المتأخر %': x.overdueRate === null ? '' : x.overdueRate,
+      '1-30 يوم': x.aging30, '31-60': x.aging60, '61-90': x.aging90, 'أكتر من 90': x.aging90p,
+      'حد الائتمان': x.creditLimit,
+      'زيارات الفترة': x.visits, 'آخر زيارة': x.lastVisitEver, 'من كام يوم': x.daysSinceVisit,
+      'آخر دفعة': x.lastPayment, 'من كام يوم (دفعة)': x.daysSincePayment
+    })));
+};
+
 A.loadRegions = async () => {
-  const payload = { from: ($('#rg-from') || {}).value || '', to: ($('#rg-to') || {}).value || '' };
+  const payload = { from: ($('#rg-from') || {}).value || '', to: ($('#rg-to') || {}).value || '',
+                    compare: ($('#rg-cmp') || {}).checked || false };
+  S.rregCmp = payload.compare;
   toast('⏳ بجهز التقرير...');
   try { S.rreg = await api('regionsReport', payload); render(); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
