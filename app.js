@@ -237,8 +237,17 @@ async function api(action, payload, opts) {
  */
 const QUEUE_MAX_BYTES = 2500000;   // ~2.5 ميجا — السندات فيها صور فالحد ده مهم
 
+/** مفتاح فريد لكل عملية — بيمنع تسجيلها مرتين لو الرد ضاع واتبعتت تاني */
+function opId() {
+  return (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+}
+
 function qpush(action, payload) {
-  S.queue.push({ action, payload, ts: Date.now() });
+  // المفتاح بيتولد وقت الحفظ في الطابور مش وقت الإرسال —
+  // عشان كل إعادة إرسال تفضل بنفس المفتاح فالسيرفر يعرف إنها نفس العملية
+  const body = Object.assign({}, payload || {});
+  if (!body.op_id) body.op_id = opId();
+  S.queue.push({ action, payload: body, ts: Date.now() });
   const str = JSON.stringify(S.queue);
   if (str.length > QUEUE_MAX_BYTES) {
     S.queue.pop();
@@ -254,8 +263,13 @@ function qpush(action, payload) {
   return true;
 }
 
+// قفل: qflush بيتنادى من 4 أماكن (رجوع النت، إنهاء زيارة، فتح التطبيق، زرار التحديث).
+// من غير القفل ده ممكن اتنين يشتغلوا مع بعض ويبعتوا نفس الطابور مرتين.
+let _flushing = false;
+
 async function qflush() {
-  if (!S.queue.length || !navigator.onLine) return;
+  if (_flushing || !S.queue.length || !navigator.onLine) return;
+  _flushing = true;
   const batch = S.queue.slice();
   try {
     await api('syncOffline', { queue: batch });
@@ -263,7 +277,11 @@ async function qflush() {
     save('crm_queue', S.queue);
     toast('✅ اترفعت ' + batch.length + ' عملية كانت متخزنة أوفلاين', 'ok');
     refresh(true);
-  } catch (e) { /* هنحاول تاني بعدين */ }
+  } catch (e) {
+    /* هنحاول تاني بعدين — ولو كان اتنفذ فعلًا، مفتاح العملية بيمنع التكرار */
+  } finally {
+    _flushing = false;
+  }
 }
 
 async function refresh(silent) {
@@ -739,17 +757,21 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
 async function doCheckin(c, pos, locationAdded) {
   const nowTime = new Date().toTimeString().slice(0, 5);
   if (pos) pushTrackPoint(pos.lat, pos.lng, pos.acc, 'وصول: ' + c.name);
+  // مفتاح واحد لدورة الزيارة كلها — لو الرد ضاع وأعاد، السيرفر يعرف إنها نفس الزيارة
   const payload = { customer_id: c.id, lat: pos ? pos.lat : '', lng: pos ? pos.lng : '',
-                    location_added: !!locationAdded };
+                    location_added: !!locationAdded, op_id: opId() };
   try {
     const res = await api('checkin', payload);
     S.liveVisit = { visit_id: res.visit_id, customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: res.distance_m, inRange: res.inRange, local: false };
-    if (res.inRange === false) toast('⚠️ إنت على بعد ' + res.distance_m + ' م من لوكيشن العميل المسجل', 'err');
+    if (res.resumed) toast('↩️ عندك زيارة مفتوحة عند ' + c.name + ' — كمّلنا عليها', 'ok');
+    else if (res.inRange === false) toast('⚠️ إنت على بعد ' + res.distance_m + ' م من لوكيشن العميل المسجل', 'err');
     else toast('✅ اتسجل وصولك عند ' + c.name, 'ok');
   } catch (e) {
     if (e.offline) {
       const dm = (pos && c.lat) ? distMeters(pos.lat, pos.lng, Number(c.lat), Number(c.lng)) : '';
-      S.liveVisit = { visit_id: '', customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: dm, inRange: null, local: true };
+      // بنحتفظ بمفتاح الزيارة — لو السيرفر كان سجّلها فعلًا والرد ضاع،
+      // المفتاح ده بيخلي الإرسال الجاي يتعرف عليها بدل ما يعملها تاني
+      S.liveVisit = { visit_id: '', customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: dm, inRange: null, local: true, op_id: payload.op_id };
       toast('📴 مفيش نت — الزيارة اتسجلت محليًا وهتترفع تلقائي', 'ok');
     } else { toast(e.msg || 'خطأ', 'err'); return; }
   }
@@ -3139,6 +3161,7 @@ function adReports() {
         <button class="btn ghost" onclick="A.quickVrep('week')">آخر 7 أيام</button>
         <button class="btn ghost" onclick="A.quickVrep('month')">الشهر ده</button>
       </div>
+      <button class="btn ghost full mt" onclick="A.visitIssues()">🧹 فحص الزيارات المكررة والمعلقة</button>
     </div>
 
     ${!r ? '<div class="empty"><div class="big">📄</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
@@ -3231,6 +3254,99 @@ function adReports() {
       <p class="muted mt">الملفات بتنزل CSV وبتتفتح على Excel — وكل البيانات الكاملة موجودة برضه في شيت جوجل نفسه.</p>
     </div>`;
 }
+// ----- تنضيف الزيارات المكررة والمعلقة -----
+A.visitIssues = async () => {
+  toast('⏳ بفحص الزيارات...');
+  try {
+    S.vissues = await api('visitIssues', { days: 60 });
+    renderVisitIssues();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+function renderVisitIssues() {
+  const r = S.vissues;
+  openModal(`
+    <h2>🧹 فحص الزيارات</h2>
+    <p class="modal-sub">آخر ${r.days} يوم</p>
+
+    ${!r.staleCount && !r.duplicateGroups
+      ? '<div class="card" style="border-right:4px solid var(--green)"><b>✅ مفيش أي مشاكل</b><p class="muted">مفيش زيارات مكررة ولا معلقة.</p></div>'
+      : ''}
+
+    ${r.staleCount ? `<div class="card" style="border-right:4px solid var(--amber)">
+      <b>⏳ ${r.staleCount} زيارة معلقة على "جارية"</b>
+      <p class="muted">دي زيارات اتفتحت ومااتقفلتش — بتتحسب في التقارير غلط.
+      المفروض تتقفل بحالة "مقفولة تلقائيًا" عشان تبان إنها مش زيارة مكتملة.</p>
+      <div class="table-wrap"><table>
+        <tr><th>التاريخ</th><th>المندوب</th><th>العميل</th><th>بدأت</th><th>مفتوحة من</th></tr>
+        ${r.stale.slice(0, 30).map(v => `<tr>
+          <td>${esc(v.date)}</td><td>${esc(v.rep_name)}</td><td>${esc(v.customer_name)}</td>
+          <td>${esc(v.checkin || '—')}</td><td>${v.hoursOpen} ساعة</td>
+        </tr>`).join('')}
+      </table></div>
+      ${r.staleCount > 30 ? '<p class="muted">معروض أول 30</p>' : ''}
+      <button class="btn amber full mt" onclick="A.closeStale()">اقفل الـ ${r.staleCount} زيارة دي</button>
+    </div>` : ''}
+
+    ${r.duplicateGroups ? `<div class="card" style="border-right:4px solid var(--red)">
+      <b>🔴 ${r.duplicateGroups} حالة تكرار (${r.duplicateExtra} زيارة زيادة)</b>
+      <p class="muted">نفس المندوب زار نفس العميل في نفس اليوم أكتر من مرة.
+      علّمت على اللي أنصح تسيبه (الأكمل) — راجع بنفسك وحدد اللي عايز تشيله.</p>
+    </div>
+    ${r.duplicates.map((d, gi) => `
+      <div class="card">
+        <b>${esc(d.customer_name)}</b> — ${esc(d.rep_name)} — ${esc(d.date)} (${d.count} زيارات)
+        <div class="table-wrap mt"><table>
+          <tr><th>شيل</th><th>الحالة</th><th>الوقت</th><th>المدة</th><th>النتيجة</th><th>التقرير</th><th>الاقتراح</th></tr>
+          ${d.rows.map(x => `<tr>
+            <td><input type="checkbox" class="vdup" data-id="${esc(x.id)}" ${x.suggestion === 'يتشال' ? 'checked' : ''}></td>
+            <td>${x.status === 'تمت' ? '<span class="badge cool">تمت</span>'
+                 : x.status === 'جارية' ? '<span class="badge warm">جارية</span>'
+                 : '<span class="badge gray">' + esc(x.status || '—') + '</span>'}</td>
+            <td style="white-space:nowrap">${esc(x.checkin || '—')}${x.checkout ? ' ← ' + esc(x.checkout) : ''}</td>
+            <td>${x.duration !== '' ? x.duration + ' د' : '—'}</td>
+            <td>${esc(x.outcome || '—')}</td>
+            <td style="max-width:220px">${esc(x.report || '') || '<span class="muted">مفيش</span>'}${x.hasPhotos ? ' 📷' : ''}</td>
+            <td>${x.suggestion === 'يفضل' ? '<span class="badge cool">سيبه</span>' : '<span class="badge hot">شيله</span>'}</td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`).join('')}
+    <div class="card" style="border-right:4px solid var(--red)">
+      <b>حذف المحدد</b>
+      <p class="muted">هياخد نسخة احتياطية إجباري الأول. الحذف نهائي.</p>
+      <label>اكتب كلمة "مسح" للتأكيد</label>
+      <input id="vdel-confirm" placeholder="مسح">
+      <button class="btn red full mt" onclick="A.deleteDupVisits()">🗑️ امسح الزيارات المحددة</button>
+    </div>` : ''}
+
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+}
+
+A.closeStale = async () => {
+  closeModal();
+  toast('⏳ بيقفل الزيارات المعلقة...');
+  try {
+    const r = await api('fixVisitIssues', { closeStale: true });
+    toast(r.message, 'ok');
+    A.visitIssues();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.deleteDupVisits = async () => {
+  const ids = Array.from(document.querySelectorAll('.vdup')).filter(c => c.checked).map(c => c.dataset.id);
+  if (!ids.length) return toast('محددتش أي زيارة', 'err');
+  const confirmWord = ($('#vdel-confirm') || {}).value || '';
+  if (confirmWord.trim() !== 'مسح') return toast('اكتب كلمة "مسح" للتأكيد', 'err');
+  if (!confirm('هيتمسح ' + ids.length + ' زيارة نهائيًا. متأكد؟')) return;
+  closeModal();
+  toast('⏳ بياخد نسخة احتياطية وبيمسح...');
+  try {
+    const r = await api('fixVisitIssues', { deleteIds: ids, confirm: 'مسح' });
+    toast(r.message, 'ok');
+    if (S.vrep) A.loadVisitsReport();
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
 A.loadVisitsReport = async () => {
   const payload = {
     from: ($('#rp-from') || {}).value || '', to: ($('#rp-to') || {}).value || '',
