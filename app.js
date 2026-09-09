@@ -3117,6 +3117,154 @@ A.saveTarget = async (repId, month) => {
 
 // ----- التقارير -----
 function adReports() {
+  const sub = S.repTab || 'visits';
+  return `
+    <div class="pill-row">
+      <button class="pill ${sub === 'visits' ? 'active' : ''}" onclick="A.repTab('visits')">📍 الزيارات</button>
+      <button class="pill ${sub === 'regions' ? 'active' : ''}" onclick="A.repTab('regions')">🗺️ أداء المناطق</button>
+      <button class="pill ${sub === 'files' ? 'active' : ''}" onclick="A.repTab('files')">📄 تصدير البيانات</button>
+    </div>
+    ${sub === 'regions' ? adRegions() : sub === 'files' ? adExportFiles() : adVisitsReport()}`;
+}
+A.repTab = t => { S.repTab = t; render(); window.scrollTo(0, 0); };
+
+function adExportFiles() {
+  return `
+    <div class="card">
+      <h3>💰 تصدير البيانات (من قيود)</h3>
+      <div class="flex">
+        <button class="btn ghost" onclick="A.exportCsv('receipts')">⬇️ التحصيلات</button>
+        <button class="btn ghost" onclick="A.exportCsv('invoices')">⬇️ الفواتير</button>
+        <button class="btn ghost" onclick="A.exportCsv('returns')">⬇️ المرتجعات</button>
+        <button class="btn ghost" onclick="A.exportCsv('customers')">⬇️ العملاء وأرصدتهم</button>
+      </div>
+      <p class="muted mt">الملفات بتنزل CSV وبتتفتح على Excel — وكل البيانات الكاملة موجودة برضه في شيت جوجل نفسه.</p>
+    </div>`;
+}
+
+// ================== تقرير أداء المناطق ==================
+function adRegions() {
+  const r = S.rreg;
+  const today = todayISO();
+  const monthStart = today.slice(0, 8) + '01';
+  const cur$ = (r && r.currency) || cur();
+  const pct = v => v === null || v === undefined ? '—' : v + '%';
+  const rateBadge = v => v === null ? '<span class="muted">—</span>'
+    : '<span class="badge ' + (v >= 90 ? 'cool' : v >= 60 ? 'warm' : 'hot') + '">' + v + '%</span>';
+  const scoreBadge = x => x.score === null
+    ? '<span class="badge gray">' + esc(x.rating) + '</span>'
+    : '<span class="badge ' + (x.score >= 80 ? 'cool' : x.score >= 60 ? 'info' : x.score >= 40 ? 'warm' : 'hot') +
+      '">' + x.score + ' — ' + esc(x.rating) + '</span>';
+  return `
+    <div class="card">
+      <h3>🗺️ أداء المناطق</h3>
+      <div class="grid2">
+        <div><label>من تاريخ</label><input type="date" id="rg-from" value="${esc((r && r.from) || monthStart)}"></div>
+        <div><label>إلى تاريخ</label><input type="date" id="rg-to" value="${esc((r && r.to) || today)}"></div>
+      </div>
+      <div class="flex mt">
+        <button class="btn" onclick="A.loadRegions()">عرض التقرير</button>
+        <button class="btn ghost" onclick="A.quickReg('month')">الشهر ده</button>
+        <button class="btn ghost" onclick="A.quickReg('quarter')">آخر 3 شهور</button>
+        <button class="btn ghost" onclick="A.quickReg('year')">من أول السنة</button>
+      </div>
+    </div>
+
+    ${!r ? '<div class="empty"><div class="big">🗺️</div>حدد الفترة واضغط "عرض التقرير"</div>' : `
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">${money(r.totals.netSales)}</div><div class="lbl">صافي المبيعات (${esc(cur$)})</div></div>
+        <div class="kpi"><div class="num" style="color:var(--green)">${money(r.totals.collected)}</div><div class="lbl">التحصيلات</div></div>
+        <div class="kpi"><div class="num" style="color:${(r.totals.collectionRate || 0) >= 90 ? 'var(--green)' : (r.totals.collectionRate || 0) >= 60 ? 'var(--amber)' : 'var(--red)'}">${pct(r.totals.collectionRate)}</div>
+          <div class="lbl">نسبة التحصيل للمبيعات</div></div>
+        <div class="kpi"><div class="num" style="color:${r.totals.overdue ? 'var(--red)' : 'var(--green)'}">${money(r.totals.overdue)}</div>
+          <div class="lbl">المتأخرات (${pct(r.totals.overdueRate)} من الرصيد)</div></div>
+      </div>
+      ${r.totals.pendingCollections ? `<div class="card" style="border-right:4px solid var(--amber)">
+        <b>ℹ️ ${money(r.totals.pendingCollections)} ${esc(cur$)} تحصيلات مسجلة عندنا ولسه مترحّلتش لقيود</b>
+        <p class="muted">الأرقام فوق من قيود — فالمبلغ ده لسه مش داخل فيها.</p></div>` : ''}
+
+      <div class="section-title"><span>ترتيب المناطق (${r.rows.length})</span>
+        <button class="btn sm ghost" onclick="A.exportRegions()">⬇️ تنزيل Excel</button></div>
+      <div class="table-wrap"><table>
+        <tr><th>المنطقة</th><th>المناديب</th><th>العملاء</th>
+            <th>صافي المبيعات</th><th>% من الإجمالي</th>
+            <th>التحصيلات</th><th>% من الإجمالي</th>
+            <th>نسبة التحصيل</th><th>المتأخرات</th><th>التغطية</th><th>التقييم</th></tr>
+        ${r.rows.map(x => `<tr>
+          <td><b>${esc(x.name)}</b>${x.reps.length ? '<div class="muted" style="font-size:11px">' + esc(x.reps.join('، ')) + '</div>' : ''}</td>
+          <td>${x.repsCount}</td>
+          <td>${x.activeCustomers}</td>
+          <td><b>${money(x.netSales)}</b>${x.returns ? '<div class="muted" style="font-size:11px">مرتجع ' + money(x.returns) + '</div>' : ''}</td>
+          <td>${x.salesShare}%<div class="bar"><i style="width:${Math.min(100, x.salesShare)}%"></i></div></td>
+          <td class="pos"><b>${money(x.collected)}</b></td>
+          <td>${x.collectedShare}%</td>
+          <td>${rateBadge(x.collectionRate)}</td>
+          <td>${x.overdue ? '<span class="neg">' + money(x.overdue) + '</span><div class="muted" style="font-size:11px">' + pct(x.overdueRate) + ' من الرصيد</div>' : '—'}</td>
+          <td>${x.coverage === null ? '—' : x.coverage + '%<div class="muted" style="font-size:11px">' + x.covered + ' من ' + x.activeCustomers + '</div>'}</td>
+          <td>${scoreBadge(x)}</td>
+        </tr>`).join('') || '<tr><td colspan="11" class="muted">مفيش بيانات في الفترة دي</td></tr>'}
+        <tr style="background:var(--blue-soft)">
+          <td><b>الإجمالي</b></td><td>—</td><td><b>${r.totals.customers}</b></td>
+          <td><b>${money(r.totals.netSales)}</b></td><td>100%</td>
+          <td><b>${money(r.totals.collected)}</b></td><td>100%</td>
+          <td><b>${pct(r.totals.collectionRate)}</b></td>
+          <td><b>${money(r.totals.overdue)}</b></td>
+          <td>—</td><td>—</td>
+        </tr>
+      </table></div>
+
+      <div class="card mt">
+        <b>📐 التقييم بيتحسب إزاي؟</b>
+        <p class="muted">درجة من 100 من تلات عناصر:</p>
+        <div class="stat-line"><span>نسبة التحصيل للمبيعات</span><b>${r.weights.collectionRate}%</b></div>
+        <div class="stat-line"><span>تغطية العملاء بالزيارات</span><b>${r.weights.coverage}%</b></div>
+        <div class="stat-line"><span>صحة المتأخرات (كل ما قلّت زاد التقييم)</span><b>${r.weights.overdueHealth}%</b></div>
+        <p class="muted mt">لو عنصر مش قابل للقياس في الفترة (مثلًا منطقة مفيهاش مبيعات خالص)،
+        بيتشال ووزنه بيتوزع على الباقي — عشان المنطقة ماتتظلمش بصفر.</p>
+        <p class="muted">80 فأكتر ممتاز · 60–79 جيد · 40–59 متوسط · أقل من 40 محتاج تدخل</p>
+      </div>
+      <p class="muted">المبيعات والتحصيلات من قيود خلال الفترة. <b>الأرصدة والمتأخرات لحظية</b> (الوضع الحالي مش خلال الفترة).</p>
+    `}`;
+}
+
+A.loadRegions = async () => {
+  const payload = { from: ($('#rg-from') || {}).value || '', to: ($('#rg-to') || {}).value || '' };
+  toast('⏳ بجهز التقرير...');
+  try { S.rreg = await api('regionsReport', payload); render(); }
+  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+A.quickReg = (kind) => {
+  const t = todayISO();
+  const d = new Date();
+  let from;
+  if (kind === 'quarter') { d.setMonth(d.getMonth() - 2); from = todayISO(d).slice(0, 8) + '01'; }
+  else if (kind === 'year') from = t.slice(0, 4) + '-01-01';
+  else from = t.slice(0, 8) + '01';
+  $('#rg-from').value = from;
+  $('#rg-to').value = t;
+  A.loadRegions();
+};
+A.exportRegions = () => {
+  const r = S.rreg;
+  if (!r) return;
+  downloadCsv('أداء_المناطق_' + (r.from || 'من_البداية') + '_' + (r.to || 'للنهارده'),
+    (r.rows || []).map(x => ({
+      'المنطقة': x.name, 'المناديب': x.reps.join('، '), 'عدد العملاء': x.activeCustomers,
+      'إجمالي المبيعات': x.grossSales, 'المرتجعات': x.returns, 'صافي المبيعات': x.netSales,
+      '% من إجمالي المبيعات': x.salesShare, 'التحصيلات': x.collected,
+      '% من إجمالي التحصيلات': x.collectedShare,
+      'نسبة التحصيل للمبيعات': x.collectionRate === null ? '' : x.collectionRate,
+      'تحصيلات لسه مترحّلتش': x.pendingCollections,
+      'الرصيد': x.balance, 'المتأخرات': x.overdue,
+      'نسبة المتأخرات': x.overdueRate === null ? '' : x.overdueRate,
+      'الزيارات': x.visits, 'عملاء اتزاروا': x.covered,
+      'التغطية %': x.coverage === null ? '' : x.coverage,
+      'الدرجة': x.score === null ? '' : x.score, 'التقييم': x.rating
+    })));
+};
+
+// ================== تقرير الزيارات ==================
+function adVisitsReport() {
   const reps = (S.data.users || []).filter(u => u.role === 'rep');
   const regions = S.data.regions || [];
   const r = S.vrep;
@@ -3243,16 +3391,7 @@ function adReports() {
       </table></div>
       ${r.truncated ? '<p class="muted">معروض أول 800 زيارة — ضيّق الفترة أو نزّل الملف للتفاصيل الكاملة.</p>' : ''}
     `}
-    <div class="card">
-      <h3>💰 تقارير المالية (من قيود)</h3>
-      <div class="flex">
-        <button class="btn ghost" onclick="A.exportCsv('receipts')">⬇️ التحصيلات</button>
-        <button class="btn ghost" onclick="A.exportCsv('invoices')">⬇️ الفواتير</button>
-        <button class="btn ghost" onclick="A.exportCsv('returns')">⬇️ المرتجعات</button>
-        <button class="btn ghost" onclick="A.exportCsv('customers')">⬇️ العملاء وأرصدتهم</button>
-      </div>
-      <p class="muted mt">الملفات بتنزل CSV وبتتفتح على Excel — وكل البيانات الكاملة موجودة برضه في شيت جوجل نفسه.</p>
-    </div>`;
+    `;
 }
 // ----- تنضيف الزيارات المكررة والمعلقة -----
 A.visitIssues = async () => {
