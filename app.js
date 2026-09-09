@@ -3313,33 +3313,78 @@ function ptsBadge(v) {
 }
 
 A.probeInvoices = async () => {
-  toast('⏳ بجيب عينة من قيود...');
+  toast('⏳ بفحص الفواتير الناقصة...');
   try {
     const r = await api('invoiceDetailProbe', {});
     if (!r.ok) return toast(r.error || 'خطأ', 'err');
     openModal(`
       <h2>🔬 ليه تفاصيل الفواتير ناقصة؟</h2>
-      <p class="modal-sub">فحصنا ${r.summary.checked} فاتورة: ${r.summary.ok} مطابقة ·
-        ${r.summary.bad} مش مطابقة · ${r.summary.noLines} من غير بنود</p>
-      ${(r.samples || []).map(x => `<div class="card" style="border-right:4px solid ${x.ok ? 'var(--green)' : 'var(--red)'}">
-        <b>${x.ok ? '✅' : '❌'} فاتورة ${esc(String(x.number))}</b>
+      <div class="card" style="border-right:4px solid var(--blue)">
+        <b>${esc(r.verdict || '')}</b>
+        <div class="stat-line mt"><span>فواتير سليمة</span><b class="pos">${r.okStored}</b></div>
+        <div class="stat-line"><span>فواتير ناقصة</span><b class="neg">${r.badStored}</b></div>
+        <div class="stat-line"><span>منها: قيود مرجّعش بنودها</span><b>${r.noLines}</b></div>
+        <div class="stat-line"><span>منها: بنودها مش مطابقة للإجمالي</span><b>${r.mismatch}</b></div>
+        ${r.dateRange ? '<div class="stat-line"><span>تواريخها</span><b>' + esc(r.dateRange.from) + ' ← ' + esc(r.dateRange.to) + '</b></div>' : ''}
+      </div>
+
+      ${r.noLines ? `<div class="card" style="border-right:4px solid var(--amber)">
+        <b>🔧 الحل: نجيب تفاصيلها من قيود واحدة واحدة</b>
+        <p class="muted">قيود ساعات مبيرجّعش بنود الفاتورة في القائمة، لكن بيرجّعها لما نطلب
+        الفاتورة لوحدها. الزرار ده بيعمل كده على دفعات (40 فاتورة في المرة).</p>
+        <button class="btn amber full" onclick="A.backfillInvoices()">جيب تفاصيل الفواتير الناقصة</button>
+      </div>` : ''}
+
+      ${(r.stored || []).length ? `<div class="section-title"><span>الفواتير الناقصة زي ما هي عندنا</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>الفاتورة</th><th>التاريخ</th><th>إجمالي قيود</th><th>الصافي</th><th>الضريبة</th><th>الخصم</th><th>المجموع</th><th>الفرق</th></tr>
+        ${r.stored.map(x => `<tr>
+          <td>${esc(String(x.number))}</td><td>${esc(x.date)}</td>
+          <td><b>${money(x.total)}</b></td>
+          <td>${typeof x.subtotal === 'number' ? money(x.subtotal) : '<span class="muted">' + esc(String(x.subtotal)) + '</span>'}</td>
+          <td>${typeof x.tax === 'number' ? money(x.tax) : '<span class="muted">' + esc(String(x.tax)) + '</span>'}</td>
+          <td>${typeof x.discount === 'number' ? money(x.discount) : '<span class="muted">' + esc(String(x.discount)) + '</span>'}</td>
+          <td>${typeof x.sum === 'number' ? money(x.sum) : '—'}</td>
+          <td class="${typeof x.diff === 'number' && Math.abs(x.diff) > 1 ? 'neg' : ''}">${typeof x.diff === 'number' ? money(x.diff) : '—'}</td>
+        </tr>`).join('')}
+      </table></div>` : ''}
+
+      ${(r.live || []).length ? `<div class="section-title"><span>نفس الفواتير دي لما نجيبها من قيود لوحدها</span></div>
+      ${r.live.map(x => x.error
+        ? `<div class="card" style="border-right:4px solid var(--red)"><b>فاتورة ${esc(x.number)}</b><p>${esc(x.error)}</p></div>`
+        : `<div class="card" style="border-right:4px solid ${x.computed.ok === 'TRUE' ? 'var(--green)' : 'var(--red)'}">
+        <b>${x.computed.ok === 'TRUE' ? '✅' : '❌'} فاتورة ${esc(String(x.number))}</b>
+        <div class="stat-line"><span>فيها بنود لما نجيبها لوحدها؟</span><b>${x.hasLinesInSingle ? 'أيوه (' + x.lineCount + ' بند)' : 'لأ'}</b></div>
         <div class="stat-line"><span>إجمالي قيود</span><b>${money(x.total)}</b></div>
-        <div class="stat-line"><span>حسابنا (صافي + ضريبة)</span><b>${money(x.computed.sum)}</b></div>
-        <div class="stat-line"><span>الفرق</span><b class="${Math.abs(x.total - x.computed.sum) > 1 ? 'neg' : 'pos'}">${money(x.total - x.computed.sum)}</b></div>
+        <div class="stat-line"><span>حسابنا</span><b>${money(x.sum)}</b></div>
+        <div class="stat-line"><span>الفرق</span><b class="${Math.abs(x.total - x.sum) > 1 ? 'neg' : 'pos'}">${money(x.total - x.sum)}</b></div>
         <div class="stat-line"><span>خصم على الفاتورة كلها</span><b>${esc(String(x.headerDiscount))}</b></div>
-        <div class="stat-line"><span>عدد البنود</span><b>${x.lineCount}</b></div>
-        <div class="table-wrap mt"><table>
+        ${x.lines.length ? `<div class="table-wrap mt"><table>
           <tr><th>كمية</th><th>سعر</th><th>خصم مبلغ</th><th>خصم %</th><th>ضريبة %</th><th>إجمالي البند</th></tr>
           ${x.lines.map(l => `<tr>
             <td>${esc(String(l.qty))}</td><td>${esc(String(l.price))}</td>
             <td>${esc(String(l.discount_amount))}</td><td>${esc(String(l.discount_percent))}</td>
             <td>${esc(String(l.tax_percent))}</td><td>${esc(String(l.line_total))}</td>
           </tr>`).join('')}
-        </table></div>
-        <p class="muted" style="font-size:11px;direction:ltr;text-align:left">${esc(x.allFields)}</p>
-      </div>`).join('')}
-      <p class="muted">ابعتلي صورة من الشاشة دي وأنا أظبط الحساب على الشكل اللي عندك.</p>
+        </table></div>` : ''}
+        <p class="muted" style="font-size:11px;direction:ltr;text-align:left">${esc(x.fields)}</p>
+      </div>`).join('')}` : ''}
+
+      <p class="muted">لو الحل مش واضح من الأرقام دي، ابعتلي صورة من الشاشة.</p>
       <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+  } catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+A.backfillInvoices = async () => {
+  closeModal();
+  toast('⏳ بجيب التفاصيل من قيود — ممكن ياخد دقيقة...');
+  try {
+    const r = await api('backfillInvoiceDetails', { limit: 40 });
+    toast(r.message, 'ok');
+    if (r.remaining > 0) {
+      if (confirm(r.message + '\n\nتكمل الدفعة اللي بعدها؟')) return A.backfillInvoices();
+    }
+    if (S.rreg) A.loadRegions();
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
