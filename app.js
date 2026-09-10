@@ -1553,7 +1553,8 @@ function adDaily() {
         <button class="btn amber sm" onclick="A.leaderboard('week')">🏆 ترتيب المناديب</button>
       </div>
       <p class="muted" style="margin-top:-4px">التلاتة بيتبعتوا لوحدهم كل يوم: تقارير المناديب 7 مساءً،
-      وتقرير اليوم وملخص الشهر 8 مساءً.</p>
+      وتقرير اليوم وملخص الشهر 8 مساءً. وكمان أول ما أي مندوب يكتب تقرير زيارة
+      بيوصلك على طول (تقدر تقفلها من الإعدادات).</p>
       <div class="table-wrap"><table>
         <tr><th>المندوب</th><th>المنطقة</th><th>الزيارات</th><th>التغطية</th><th>التحصيلات</th><th>صافي المبيعات</th><th>خارج الخطة</th><th>المسافة</th><th>أول تحرك</th><th>آخر تحرك</th><th>ساعات</th><th>متوسط الزيارة</th><th></th></tr>
         ${rep.reps.map(r => `<tr>
@@ -1689,13 +1690,15 @@ A.sendSummaryNow = async () => {
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
+// الاتنين دول بيرجّعوا فورًا والإرسال بيكمّل في الخلفية — عشان التقرير
+// لما يكبر مكانش بيلحق يخلّص جوه الطلب وكان بيدي تايم أوت
 A.sendMonthNow = async () => {
-  toast('⏳ بجهز ملخص الشهر وببعته...');
+  toast('⏳ بجهز ملخص الشهر...');
   try { const r = await api('sendMonthSummaryNow', {}); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 A.sendRepReportsNow = async () => {
-  toast('⏳ ببعت تقارير المناديب...');
+  toast('⏳ بجهز تقارير المناديب...');
   try { const r = await api('sendRepReportsNow', { date: (S.daily && S.daily.date) || '' }); toast(r.message, 'ok'); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
@@ -4185,6 +4188,15 @@ function adSettings() {
       <div class="flex mt">
         <button class="btn ghost sm" onclick="A.previewReceipt()">👁 شوف شكل سند القبض</button>
       </div>
+      <div class="card mt">
+        <b>📲 رسايل تليجرام للمديرين</b>
+        <p class="muted">اللي بيوصل للأدمن المتصلين بالبوت.</p>
+        <label><input type="checkbox" id="s-tg-report" ${String(s.TG_NOTIFY_ON_REPORT || 'TRUE').toUpperCase() !== 'FALSE' ? 'checked' : ''} style="width:auto">
+          إشعار فوري أول ما المندوب يكتب تقرير زيارة</label>
+        <p class="muted">الرسايل اليومية بتتبعت لوحدها: تقارير المناديب 7 مساءً،
+        تقرير اليوم وملخص الشهر 8 مساءً.</p>
+      </div>
+
       <div class="card mt" style="background:var(--amber-soft)">
         <b>📐 أوزان تقييم المناطق</b>
         <p class="muted">بتتحكم في التقييم اللي بيطلع في تقرير أداء المناطق. المجموع بيتظبط تلقائي.</p>
@@ -4344,6 +4356,7 @@ A.saveSettings = async () => {
     CREDIT_BLOCK_OVERDUE: $('#s-credit-overdue').checked ? 'TRUE' : 'FALSE',
     MAX_VISIT_PHOTOS: $('#s-max-photos').value,
     SYNC_DELETE_MISSING: $('#s-sync-del').checked ? 'TRUE' : 'FALSE',
+    TG_NOTIFY_ON_REPORT: $('#s-tg-report').checked ? 'TRUE' : 'FALSE',
     SEQ_PREFIX: $('#s-seq-prefix').value,
     SEQ_PAD: normDigits($('#s-seq-pad').value) || '4',
     SEQ_CODE_QUOTE: $('#s-seq-qte').value.trim() || 'QTE',
