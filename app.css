@@ -214,6 +214,38 @@ th { text-align: right; background: #f8fafc; color: var(--muted); font-size: 12p
 td { padding: 10px 12px; border-bottom: 1px solid #f0f3f8; vertical-align: middle; }
 tr:last-child td { border-bottom: none; }
 
+/* التوست z-index 400 — فوق طبقة التحميل (300) عشان رسالة "⏳ بجهز..."
+   اللي بتظهر قبل النداء متتغطّاش بالرمادي. */
+
+/* ---------- طبقة التحميل ----------
+   بتقفل الشاشة بمجرد ما أي عملية تبدأ (عشان متتضغطش الأزرار تاني)،
+   والخلفية الرمادية بتظهر بعد لحظة بس — عشان الطلب السريع ميعملش وميض. */
+#busy-root {
+  position: fixed; inset: 0; z-index: 300;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(15, 39, 68, .42);
+  opacity: 0; transition: opacity .18s ease;
+}
+#busy-root.blocking { display: flex; }        /* بيمنع الضغط فورًا وهو لسه شفاف */
+#busy-root.on { opacity: 1; }                 /* الرمادي بيبان بعد لحظة */
+.busy-box {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  background: var(--card); border-radius: var(--radius);
+  padding: 22px 26px; box-shadow: 0 8px 30px rgba(15, 39, 68, .25);
+  min-width: 150px; text-align: center;
+}
+.spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--blue);
+  animation: spin .7s linear infinite;
+}
+.busy-text { font-size: 13.5px; color: var(--muted); font-weight: 600; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* اللي بيفضّل تقليل الحركة: الدايرة بتنبض بدل ما تلف */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: pulse 1.2s ease-in-out infinite; border-top-color: var(--blue); }
+}
+
 /* ---------- المودال ---------- */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(10, 20, 35, .55); z-index: 100;
@@ -238,7 +270,7 @@ tr:last-child td { border-bottom: none; }
 #map-pick { height: 300px; border-radius: 12px; margin-top: 10px; border: 1.5px solid var(--border); }
 
 /* ---------- التوست ---------- */
-#toast-root { position: fixed; bottom: 84px; right: 0; left: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+#toast-root { position: fixed; bottom: 84px; right: 0; left: 0; z-index: 400; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
 .toast {
   background: var(--navy); color: #fff; padding: 11px 20px; border-radius: 12px;
   font-size: 14px; font-weight: 600; box-shadow: var(--shadow);
@@ -349,7 +381,7 @@ tr:last-child td { border-bottom: none; }
 .stmt-footer { text-align: center; font-size: 11px; color: #777; margin-top: 14px; }
 
 @media print {
-  #app, #modal-root, #toast-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
+  #app, #modal-root, #toast-root, #busy-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
   #print-area { display: block !important; }
   body { background: #fff; }
   /* عشان ألوان رأس الجدول واللوجو تطلع في الـ PDF مش أبيض وأسود */

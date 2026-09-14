@@ -173,7 +173,7 @@ async function syncLogo() {
   }
   if (localStorage.getItem('crm_logo_hash') === hash && localStorage.getItem('crm_logo')) return;
   try {
-    const r = await api('getLogo', {});
+    const r = await api('getLogo', {}, { quiet: true });
     if (r.logo) {
       writeLS('crm_logo', r.logo);
       writeLS('crm_logo_hash', r.hash || hash);
@@ -202,33 +202,99 @@ function deviceLabel() {
 }
 
 // ================== الاتصال بالسيرفر ==================
+/**
+ * ============================================================
+ *  طبقة التحميل
+ * ============================================================
+ * بتشتغل مع كل نداء للسيرفر أوتوماتيك — مش محتاجة تتحط على كل زرار.
+ * ثلاث قواعد مهمة:
+ *  1) بتقفل الضغط من أول لحظة (وهي لسه شفافة)، عشان الدوسة التانية
+ *     على نفس الزرار متعديش. ده الهدف الأساسي منها.
+ *  2) الرمادي بيظهر بعد 220ms بس — الطلب السريع ميعملش وميض مزعج.
+ *  3) عداد مش true/false — عشان طلبين مع بعض ميقفلوش الطبقة على بعض،
+ *     وحارس وقت بيفتحها غصب لو طلب علّق، عشان التطبيق ميتقفلش أبدًا.
+ */
+var _busyCount = 0, _busyTimer = null, _busyGuard = null;
+var BUSY_SHOW_AFTER = 220;      // بعد قد إيه الرمادي يبان
+var BUSY_MAX = 45000;           // أقصى وقت تفضل فيه مقفولة مهما حصل
+
+function busyEl() { return document.getElementById('busy-root'); }
+
+function busyOn(label) {
+  _busyCount++;
+  if (_busyCount > 1) return;
+  const el = busyEl();
+  if (!el) return;
+  const t = document.getElementById('busy-text');
+  if (t) t.textContent = label || 'جاري التحميل...';
+  el.classList.add('blocking');                 // المنع بيبدأ فورًا
+  el.setAttribute('aria-hidden', 'false');
+  clearTimeout(_busyTimer);
+  _busyTimer = setTimeout(() => el.classList.add('on'), BUSY_SHOW_AFTER);
+  clearTimeout(_busyGuard);
+  _busyGuard = setTimeout(() => { _busyCount = 0; busyHide(); }, BUSY_MAX);
+}
+
+function busyOff() {
+  if (_busyCount > 0) _busyCount--;
+  if (_busyCount > 0) return;
+  busyHide();
+}
+
+function busyHide() {
+  clearTimeout(_busyTimer); _busyTimer = null;
+  clearTimeout(_busyGuard); _busyGuard = null;
+  const el = busyEl();
+  if (!el) return;
+  el.classList.remove('on');
+  el.classList.remove('blocking');
+  el.setAttribute('aria-hidden', 'true');
+}
+
+/** للعمليات اللي مش نداء سيرفر (زي رسم صورة السند) */
+async function withBusy(label, fn) {
+  busyOn(label);
+  try { return await fn(); } finally { busyOff(); }
+}
+
 async function api(action, payload, opts) {
   if (!API_URL || API_URL.indexOf('http') !== 0) throw { fatal: 'لسه محددتش لينك السيرفر في ملف config.js' };
-  let res;
+  // quiet = نداء في الخلفية (تتبع، فحص حالة، تحديث صامت) — ميقفلش الشاشة
+  const quiet = !!(opts && opts.quiet);
+  if (!quiet) busyOn(opts && opts.label);
+  // الـ finally لافّ الدالة كلها مش الـ fetch بس: كده لو الجلسة انتهت
+  // وحصل تجديد وإعادة محاولة، الطبقة تفضل مقفولة لحد ما كله يخلص —
+  // بدل ما تتفتح وتتقفل تاني قدام المستخدم.
   try {
-    const resp = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, payload || {})) });
-    res = await resp.json();
-  } catch (e) {
-    throw { offline: true };
-  }
-  // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
-  if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
-    if (S.device) {
-      try {
-        const r = await api('renew', { device: S.device }, { noRetry: true });
-        S.token = r.token;
-        S.user = r.user;
-        writeLS('crm_token', S.token);
-        save('crm_user', S.user);
-        return api(action, payload, { noRetry: true });
-      } catch (e) { /* الجهاز اتلغى أو انتهت صلاحيته */ }
+    let res;
+    try {
+      const resp = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, payload || {})) });
+      res = await resp.json();
+    } catch (e) {
+      throw { offline: true };
     }
-    doLogout();
-    toast('انتهت الجلسة — سجل دخول تاني', 'err');
-    throw { fatal: 'انتهت الجلسة، سجل دخول تاني' };
+    // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
+    if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
+      if (S.device) {
+        try {
+          const r = await api('renew', { device: S.device }, { noRetry: true, quiet: true });
+          S.token = r.token;
+          S.user = r.user;
+          writeLS('crm_token', S.token);
+          save('crm_user', S.user);
+          return await api(action, payload, { noRetry: true, quiet: true });
+        } catch (e) { /* الجهاز اتلغى أو انتهت صلاحيته */ }
+      }
+      doLogout();
+      toast('انتهت الجلسة — سجل دخول تاني', 'err');
+      throw { fatal: 'انتهت الجلسة، سجل دخول تاني' };
+    }
+    if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
+    return res;
+  } finally {
+    // في finally عشان يقفل مهما حصل: نجاح، خطأ، أوفلاين، أو انتهاء جلسة
+    if (!quiet) busyOff();
   }
-  if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
-  return res;
 }
 
 /**
@@ -272,7 +338,7 @@ async function qflush() {
   _flushing = true;
   const batch = S.queue.slice();
   try {
-    await api('syncOffline', { queue: batch });
+    await api('syncOffline', { queue: batch }, { quiet: true });
     S.queue = S.queue.slice(batch.length);
     save('crm_queue', S.queue);
     toast('✅ اترفعت ' + batch.length + ' عملية كانت متخزنة أوفلاين', 'ok');
@@ -1434,7 +1500,7 @@ A.loadScorecard = async (force) => {
   S.scorecardLoading = true;
   if (force) { S.scorecard = null; S.scorecardErr = ''; render(); }
   try {
-    const r = await api('scorecard', {});
+    const r = await api('scorecard', {}, { quiet: true });
     S.scorecard = r; S.scorecardErr = '';
   } catch (e) {
     S.scorecardErr = e.msg || 'مش قادر أجيب التقييم دلوقتي';
@@ -4444,7 +4510,7 @@ A.syncNow = async () => {
 async function pollSyncStatus(n) {
   if (n > 60) return; // نبطل متابعة بعد ~4 دقايق
   try {
-    const r = await api('getSyncStatus', {});
+    const r = await api('getSyncStatus', {}, { quiet: true });
     const status = r.status || '';
     const el = document.getElementById('sync-status');
     if (el) el.textContent = status;
@@ -5821,7 +5887,7 @@ async function flushTrack() {
   TRK.lastFlush = Date.now();
   const batch = TRK.buf.slice(0, 120);
   try {
-    await api('track', { points: batch });
+    await api('track', { points: batch }, { quiet: true });
     TRK.buf = TRK.buf.slice(batch.length);
     writeLS('crm_track_buf', JSON.stringify(TRK.buf));
   } catch (e) { /* هنحاول تاني بعدين */ }
