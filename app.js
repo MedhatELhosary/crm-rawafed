@@ -364,16 +364,58 @@ async function qflush() {
   }
 }
 
+/**
+ * بصمات الأقسام اللي إحنا فعلًا ماسكينها.
+ *
+ * ده أهم شرط في التحديث الجزئي كله. السيرفر لما بيشوف بصمة مطابقة
+ * بيشيل القسم من الرد ويقول "مفيش تغيير"، والتطبيق المفروض يرجّعه من
+ * نسخته المحفوظة. لكن لو القسم كان ضايع من النسخة المحفوظة وبصمته
+ * فضلت موجودة، بيحصل فخ مقفول: السيرفر مبيبعتوش لأن البصمة مطابقة،
+ * والتطبيق مبيلاقيش حاجة يرجّع بيها — فالبيانات تفضل فاضية للأبد،
+ * حتى بعد ما التطبيق يتقفل ويتفتح، لأن النسخة الناقصة هي اللي متخزنة.
+ *
+ * فبنبعت بصمة القسم بس لو القسم موجود. أي قسم ناقص بصمته مبتتبعتش،
+ * فالسيرفر بيبعته كامل — والجهاز اللي كان متعلّق بيصلّح نفسه لوحده.
+ */
+function usableHashes(data) {
+  if (!data || !data.hashes) return null;
+  const out = {};
+  Object.keys(data.hashes).forEach(k => {
+    if (data[k] !== undefined) out[k] = data.hashes[k];
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+// تحديث واحد في المرة — التطبيق بينده refresh من عشرات الأماكن، ومن غير
+// الحارس ده ممكن ردين يتطبقوا فوق بعض
+let _refreshing = null;
+
 async function refresh(silent) {
   if (!S.token) return;
+  if (_refreshing) return _refreshing;
+  _refreshing = doRefreshOnce(silent).finally(() => { _refreshing = null; });
+  return _refreshing;
+}
+
+async function doRefreshOnce(silent) {
   if (!silent) S.loading = true, render();
   try {
     const action = S.user && S.user.role === 'admin' ? 'adminData' : 'bootstrap';
     // التحديث الجزئي: بنبعت بصمات اللي عندنا والسيرفر بيبعت المتغير بس
-    const res = await api(action, { hashes: (S.data && S.data.hashes) || null });
+    const res = await api(action, { hashes: usableHashes(S.data) });
+
+    // المستخدم خرج أو الجلسة انتهت وإحنا مستنيين الرد — نسيب البيانات
+    // في حالها. لو كتبنا الرد دلوقتي كنا هنخزّن نسخة ناقصة على الجهاز.
+    if (!S.token || !S.user) return;
+
     if (res.unchanged && res.unchanged.length && S.data) {
       res.unchanged.forEach(k => { if (S.data[k] !== undefined) res[k] = S.data[k]; });
     }
+    // حزام أمان: أي قسم السيرفر قال عنه "مفيش تغيير" ومالقيناهوش عندنا،
+    // بنشيل بصمته عشان التحديث الجاي يجيبه كامل
+    (res.unchanged || []).forEach(k => {
+      if (res[k] === undefined && res.hashes) delete res.hashes[k];
+    });
     S.data = res;
     save('crm_boot', res);
     // تخزين هوية الشركة محليًا عشان تظهر في شاشة الدخول قبل تحميل البيانات
