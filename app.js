@@ -485,7 +485,44 @@ function distMeters(lat1, lng1, lat2, lng2) {
 function mapsLink(lat, lng) { return 'https://www.google.com/maps/dir/?api=1&destination=' + lat + ',' + lng; }
 
 // اختيار لوكيشن على الخريطة
-function openMapPicker(lat, lng, cb) {
+/**
+ * مكتبة الخرايط بتتحمّل أول ما حد يفتح خريطة فعلًا.
+ *
+ * قبل كده كانت بتتحمّل في كل فتحة للتطبيق كسكربت معطِّل قبل التطبيق
+ * نفسه — حوالي 150 كيلو ومعاها ملف تنسيق، والمندوب ممكن يعدي يومه كله
+ * من غير ما يفتح خريطة. الملفات لسه بتتخزن مقدمًا في الـ service worker
+ * فأول استخدام بيبقى فوري وبيشتغل بدون نت.
+ */
+var _leaflet = null;
+function loadLeaflet() {
+  if (typeof L !== 'undefined') return Promise.resolve();
+  if (_leaflet) return _leaflet;
+  _leaflet = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    css.integrity = 'sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H';
+    css.crossOrigin = 'anonymous';
+    document.head.appendChild(css);
+
+    const js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.integrity = 'sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH';
+    js.crossOrigin = 'anonymous';
+    js.onload = resolve;
+    js.onerror = () => { _leaflet = null; reject(new Error('مش قادر أحمّل الخريطة')); };
+    document.head.appendChild(js);
+  });
+  return _leaflet;
+}
+
+async function openMapPicker(lat, lng, cb) {
+  if (typeof L === 'undefined') {
+    busyOn('بيحمّل الخريطة...');
+    try { await loadLeaflet(); }
+    catch (e) { busyOff(); return toast(e.message, 'err'); }
+    busyOff();
+  }
   const startLat = Number(lat) || 30.0444, startLng = Number(lng) || 31.2357;
   openModal(`
     <h2>حدد اللوكيشن على الخريطة</h2>

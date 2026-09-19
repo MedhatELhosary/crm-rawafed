@@ -8,9 +8,6 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H"
-        crossorigin="anonymous">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -25,9 +22,7 @@
   </div>
   <div id="print-area"></div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-          integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH"
-          crossorigin="anonymous"></script>
+  <!-- مكتبة الخرايط بتتحمّل عند أول استخدام — شوف loadLeaflet في core.js -->
   <script src="config.js"></script>
   <!-- app.js متولّد من app/src/*.js عن طريق build.ps1 — متعدلش فيه مباشرة -->
   <script src="app.js"></script>

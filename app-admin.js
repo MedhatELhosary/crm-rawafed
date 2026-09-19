@@ -278,9 +278,15 @@ A.loadDaily = async (offset) => {
   } catch (e) { toast(e.msg || 'خطأ', 'err'); }
 };
 
-A.showTrail = (repId) => {
+A.showTrail = async (repId) => {
   const r = (S.daily.reps || []).find(x => String(x.rep_id) === String(repId));
   if (!r) return;
+  if (typeof L === 'undefined') {
+    busyOn('بيحمّل الخريطة...');
+    try { await loadLeaflet(); }
+    catch (e) { busyOff(); return toast(e.message, 'err'); }
+    busyOff();
+  }
   openModal(`
     <h2>🗺️ خط سير ${esc(r.rep_name)}</h2>
     <p class="modal-sub">${esc(S.daily.date)} — ${r.distanceKm} كم، ${r.visitsDone} زيارة، ${r.points} نقطة تتبع</p>
