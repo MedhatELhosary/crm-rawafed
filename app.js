@@ -65,8 +65,18 @@ const S = {
 const A = {}; // مسجل الأحداث للأزرار
 window.A = A;
 
-/** حد "لازم النهارده" — لازم يبقى زي priorityLabel في Planner.gs */
+/* حدود الأولوية — لازم تفضل زي اللي في backend/Planner.gs بالظبط.
+   قبل كده كانت الشارة في التطبيق بحدود وكلام مختلفين عن السيرفر،
+   فالمندوب كان بيشوف "متوسط" والسيرفر حاسبها حاجة تانية. */
 const PRIO_URGENT = 60;
+const PRIO_IMPORTANT = 40;
+const PRIO_NORMAL = 22;
+function priorityLabel(score) {
+  if (score >= PRIO_URGENT) return 'لازم النهارده';
+  if (score >= PRIO_IMPORTANT) return 'مهم';
+  if (score >= PRIO_NORMAL) return 'عادي';
+  return 'مش مستعجل';
+}
 const DAY_NAMES = ['الجمعة', 'السبت', 'الحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس'];
 const LEAD_STAGES = ['جديد', 'تم التواصل', 'مهتم', 'اتحول لعميل', 'مش مهتم'];
 
@@ -875,9 +885,11 @@ function myCustomers() { return (S.data.customers || []).filter(c => String(c.st
 
 function priorityBadge(c) {
   const p = Number(c.priority_score) || 0;
-  if (p >= 70) return '<span class="badge hot">🔥 أولوية عالية ' + p + '</span>';
-  if (p >= 40) return '<span class="badge warm">⚡ أولوية متوسطة ' + p + '</span>';
-  return '<span class="badge cool">✓ منتظم</span>';
+  const cls = p >= PRIO_URGENT ? 'hot' : p >= PRIO_IMPORTANT ? 'warm'
+            : p >= PRIO_NORMAL ? 'info' : 'cool';
+  const icon = p >= PRIO_URGENT ? '🔴' : p >= PRIO_IMPORTANT ? '🟠'
+             : p >= PRIO_NORMAL ? '🟡' : '⚪';
+  return '<span class="badge ' + cls + '">' + icon + ' ' + priorityLabel(p) + ' ' + p + '</span>';
 }
 
 /**
