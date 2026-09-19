@@ -1,7 +1,7 @@
-﻿// Service Worker â€” ط¨ظٹط®ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ظٹظپطھط­ ط¨ط¯ظˆظ† ظ†طھطŒ ظˆط¨ظٹط§ط®ط¯ ط§ظ„طھط­ط¯ظٹط«ط§طھ ظپظˆط±ظ‹ط§ ظ„ظ…ط§ ظٹظƒظˆظ† ظپظٹظ‡ ظ†طھ
-const CACHE = 'crm-rawafed-v51';
+// Service Worker — بيخلي التطبيق يفتح بدون نت، وبياخد التحديثات فورًا لما يكون فيه نت
+const CACHE = 'crm-rawafed-v52';
 
-// ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡ â€” ط¯ظٹ ط¨طھطھط­ط¯ط« ظƒظ„ ط´ظˆظٹط©
+// ملفات التطبيق نفسه — دي بتتحدث كل شوية
 const SHELL = [
   './',
   './index.html',
@@ -10,7 +10,7 @@ const SHELL = [
   './app.js',
   './manifest.json'
 ];
-// ظ…ظ„ظپط§طھ ط«ط§ط¨طھط© ظ†ط§ط¯ط±ظ‹ط§ ط¨طھطھط؛ظٹط±
+// ملفات ثابتة نادرًا بتتغير
 const STATIC = [
   './icon-192.png',
   './icon-512.png',
@@ -28,13 +28,24 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
+    caches.keys().then(keys => {
+      // لو كان فيه كاش قديم اتمسح، يبقى دي ترقية مش أول تركيب —
+      // وساعتها بس بنقول للمستخدم إن في نسخة جديدة.
+      const old = keys.filter(k => k !== CACHE);
+      return Promise.all(old.map(k => caches.delete(k)))
+        .then(() => self.clients.claim())
+        .then(() => { if (old.length) return tellPages({ type: 'sw-updated', cache: CACHE }); });
+    })
   );
 });
 
-/** ط¨ظٹط¬ظٹط¨ ظ…ظ† ط§ظ„ظ†طھ ظˆط¨ظٹط­ط¯ظ‘ط« ط§ظ„ظƒط§ط´طŒ ظˆط¨ظٹط³طھط³ظ„ظ… ط¨ط¹ط¯ ظ…ظ‡ظ„ط© ط¹ط´ط§ظ† ط§ظ„ط´ط¨ظƒط© ط§ظ„ط¶ط¹ظٹظپط© ظ…طھط¹ط·ظ„ط´ ط§ظ„طھط·ط¨ظٹظ‚ */
+/** بيبلّغ كل صفحات التطبيق المفتوحة */
+function tellPages(msg) {
+  return self.clients.matchAll({ type: 'window' })
+    .then(list => list.forEach(c => { try { c.postMessage(msg); } catch (e) {} }));
+}
+
+/** بيجيب من النت وبيحدّث الكاش، وبيستسلم بعد مهلة عشان الشبكة الضعيفة متعطلش التطبيق */
 function fromNetwork(request, timeoutMs) {
   return new Promise(resolve => {
     let done = false;
@@ -55,13 +66,29 @@ function fromNetwork(request, timeoutMs) {
   });
 }
 
+/**
+ * الكاش الأول + تحديث في الخلفية.
+ *
+ * قبل كده كانت "النت الأول بمهلة 2.5 ثانية": يعني كل مرة المندوب يفتح
+ * التطبيق يستنى الشبكة ويعيد تحميل ملفات هو مخزّنها أصلًا — وده كان
+ * بيزاحم طلب البيانات نفسه على شبكة الموبايل الضعيفة.
+ *
+ * دلوقتي بيفتح من الكاش فورًا، والتحديث بينزل في الخلفية ويظهر في
+ * الفتحة الجاية (والتطبيق بيعرف المستخدم إن في نسخة جديدة).
+ */
+function cacheFirst(request, timeoutMs) {
+  return caches.match(request).then(cached => {
+    if (cached) { fromNetwork(request, timeoutMs); return cached; }
+    return fromNetwork(request, timeoutMs).then(r => r || cached);
+  });
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return;                      // ط·ظ„ط¨ط§طھ ط§ظ„ظ€ API ظ…طھطھظƒط§ط´ط´
+  if (req.method !== 'GET') return;                      // طلبات الـ API متتكاشش
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚: ط§ظ„ظ†طھ ط§ظ„ط£ظˆظ„ (ط¹ط´ط§ظ† ط§ظ„طھط­ط¯ظٹط« ظٹظ†ط²ظ„ ظپظˆط±ظ‹ط§) ظˆط§ظ„ظƒط§ط´ ط§ط­طھظٹط§ط·ظٹ
   const isShell = sameOrigin && (
     req.mode === 'navigate' ||
     /\.(html|js|css|json)$/.test(url.pathname) ||
@@ -70,16 +97,16 @@ self.addEventListener('fetch', e => {
 
   if (isShell) {
     e.respondWith(
-      fromNetwork(req, 2500).then(resp => resp || caches.match(req).then(c => c || caches.match('./index.html')))
+      cacheFirst(req, 8000).then(resp => resp || caches.match('./index.html'))
     );
     return;
   }
 
-  // ط§ظ„ط¨ط§ظ‚ظٹ (طµظˆط±طŒ ط®ط±ط§ظٹط·): ط§ظ„ظƒط§ط´ ط§ظ„ط£ظˆظ„ ظˆط£ط³ط±ط¹
-  e.respondWith(
-    caches.match(req).then(cached => {
-      if (cached) { fromNetwork(req, 8000); return cached; }   // ط¨ظٹطھط­ط¯ط« ظپظٹ ط§ظ„ط®ظ„ظپظٹط©
-      return fromNetwork(req, 8000).then(r => r || cached);
-    })
-  );
+  // الباقي (صور، خرايط)
+  e.respondWith(cacheFirst(req, 8000));
+});
+
+// التطبيق بيقدر يطلب تفعيل النسخة الجديدة على طول
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'skip-waiting') self.skipWaiting();
 });

@@ -289,6 +289,17 @@ async function api(action, payload, opts) {
       toast('انتهت الجلسة — سجل دخول تاني', 'err');
       throw { fatal: 'انتهت الجلسة، سجل دخول تاني' };
     }
+    // السيرفر مشغول بالمزامنة — نعيد المحاولة بهدوء بدل ما نزعج المندوب
+    // بخطأ مش ذنبه. المزامنة بتاخد ثواني معدودة فمحاولتين كفاية.
+    if (res.busy && !(opts && opts.noBusyRetry)) {
+      const tries = (opts && opts.busyTry) || 0;
+      if (tries < 2) {
+        await new Promise(r => setTimeout(r, 1500 * (tries + 1)));
+        return await api(action, payload, Object.assign({}, opts, {
+          busyTry: tries + 1, quiet: true
+        }));
+      }
+    }
     if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
     return res;
   } finally {
@@ -378,6 +389,18 @@ async function refresh(silent) {
 
 // ================== أدوات الواجهة ==================
 function $(sel) { return document.querySelector(sel); }
+/** شريط "في تحديث جديد" — بيظهر مرة واحدة بس */
+function showUpdateBar() {
+  if (document.getElementById('upd-bar')) return;
+  const d = document.createElement('div');
+  d.id = 'upd-bar';
+  d.className = 'update-bar';
+  d.innerHTML = '<span>✨ في نسخة جديدة من التطبيق</span>' +
+    '<button onclick="location.reload()">حدّث دلوقتي</button>' +
+    '<button class="x" onclick="this.parentNode.remove()">لاحقًا</button>';
+  document.body.appendChild(d);
+}
+
 function toast(msg, cls) {
   const el = document.createElement('div');
   el.className = 'toast ' + (cls || '');
@@ -603,8 +626,25 @@ function priorityBadge(c) {
   return '<span class="badge cool">✓ منتظم</span>';
 }
 
+/**
+ * المسافة بتتحسب مرة واحدة لكل عميل وبتتخزن لحد ما الموقع يتغير —
+ * قبل كده كانت بتتحسب لكل عميل في كل رسمة (مئات العمليات في الثانية
+ * وقت الكتابة في البحث).
+ */
+var _distCache = { key: '', map: {} };
+function cachedDist(c) {
+  if (!S.myPos || !c.lat || !c.lng) return null;
+  const key = S.myPos.lat + ',' + S.myPos.lng;
+  if (_distCache.key !== key) _distCache = { key: key, map: {} };
+  const id = String(c.id);
+  if (_distCache.map[id] === undefined) {
+    _distCache.map[id] = distMeters(S.myPos.lat, S.myPos.lng, Number(c.lat), Number(c.lng));
+  }
+  return _distCache.map[id];
+}
+
 function custCard(c, showDay) {
-  const dist = (S.myPos && c.lat && c.lng) ? distMeters(S.myPos.lat, S.myPos.lng, Number(c.lat), Number(c.lng)) : null;
+  const dist = cachedDist(c);
   return `<div class="cust-card">
     <div class="cust-head">
       <div>
@@ -1131,24 +1171,45 @@ function viewCustomers() {
     const f = S.custFilter.toLowerCase();
     list = list.filter(c => String(c.name).toLowerCase().includes(f) || String(c.address).toLowerCase().includes(f) || String(c.phone).includes(f));
   }
-  list.sort((a, b) => (Number(b.priority_score) || 0) - (Number(a.priority_score) || 0));
   return `
     <input placeholder="🔍 دور بالاسم أو العنوان أو التليفون" value="${esc(S.custFilter)}"
       oninput="A.custSearch(this.value)" style="margin-bottom:10px">
     <div class="pill-row">${days.map(d =>
       `<button class="pill ${String(S.custDay) === String(d[0]) ? 'active' : ''}" onclick="A.custDayF('${d[0]}')">${d[1]}</button>`).join('')}
     </div>
-    ${list.length ? list.map(c => custCard(c, true)).join('') : '<div class="empty"><div class="big">🔍</div>مفيش نتايج</div>'}`;
+    <div id="cust-list">${custListHtml()}</div>`;
 }
-A.custSearch = v => { S.custFilter = v; renderKeepFocus(); };
+
+/** قايمة العملاء المفلترة — متفصلة عشان نقدر نرسمها لوحدها */
+function custListHtml() {
+  let list = myCustomers();
+  if (S.custDay !== 'all') list = list.filter(c => String(c.visit_day) === String(S.custDay));
+  if (S.custFilter) {
+    const f = S.custFilter.toLowerCase();
+    list = list.filter(c => String(c.name).toLowerCase().includes(f) ||
+      String(c.address).toLowerCase().includes(f) || String(c.phone).includes(f));
+  }
+  list.sort((a, b) => (Number(b.priority_score) || 0) - (Number(a.priority_score) || 0));
+  return list.length ? list.map(c => custCard(c, true)).join('')
+                     : '<div class="empty"><div class="big">🔍</div>مفيش نتايج</div>';
+}
+
+/**
+ * البحث كان بيعيد بناء التطبيق كله مع كل حرف — يعني مئات الكيلوبايتات
+ * HTML وحساب مسافة لكل عميل، في كل ضغطة زرار، على موبايل في الشارع.
+ * دلوقتي بنستنى شوية لحد ما المندوب يبطّل كتابة، وبنرسم القايمة بس.
+ */
+var _custTimer = null;
+A.custSearch = v => {
+  S.custFilter = v;
+  clearTimeout(_custTimer);
+  _custTimer = setTimeout(() => {
+    const box = document.getElementById('cust-list');
+    if (box) box.innerHTML = custListHtml();   // خانة البحث نفسها مش بتتلمس
+    else render();                             // المستخدم غيّر التبويب في الوقت ده
+  }, 200);
+};
 A.custDayF = v => { S.custDay = v; render(); };
-function renderKeepFocus() {
-  const el = document.activeElement;
-  const pos = el && el.selectionStart;
-  render();
-  const input = $('.page input');
-  if (input) { input.focus(); try { input.setSelectionRange(pos, pos); } catch (e) {} }
-}
 
 // ----- تفاصيل عميل -----
 A.custDetails = (id) => {
@@ -5906,7 +5967,15 @@ document.addEventListener('visibilitychange', () => {
   ensureTracking(true);   // نقطة جديدة كل ما يرجع للتطبيق — بيها بيتوصل المسار
   flushTrack();
 });
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // الـ SW بقى بيرد من الكاش فورًا والتحديث بينزل في الخلفية — فلازم
+  // نقول للمستخدم إن في نسخة جديدة بدل ما يفضل على القديمة من غير ما يدري.
+  // الـ SW نفسه بيفرّق بين أول تركيب والترقية، فمش محتاجين نعد الرسايل هنا.
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data && e.data.type === 'sw-updated') showUpdateBar();
+  });
+}
 
 render();
 window.__crmStarted = true;   // بيقول لشبكة الأمان في index.html إن التطبيق فتح فعلًا
