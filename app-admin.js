@@ -2837,6 +2837,11 @@ function adSettings() {
       </div>
       <div class="grid2">
         <div><label>أقل متأخر يطلع له تنبيه (${esc(cur())})</label><input id="s-overdue" type="number" value="${esc(s.OVERDUE_ALERT_MIN || 500)}"></div>
+        <div class="grid2">
+          <div><label>متأخر "كبير" يستاهل زيارة فورية (${esc(cur())})</label><input id="s-prio-big" type="number" value="${esc(s.PRIO_BIG_OVERDUE || 5000)}"></div>
+          <div><label>العميل يعتبر "وقف شرا" بعد كام يوم</label><input id="s-prio-churn" type="number" value="${esc(s.PRIO_CHURN_DAYS || 45)}"></div>
+        </div>
+        <p class="muted">الرقمين دول بيتحكموا في أولوية زيارة العملاء عند المندوب.</p>
         <div><label>مدة الاستحقاق الافتراضية (يوم)</label><input id="s-terms" type="number" value="${esc(s.PAYMENT_TERMS_DAYS || 30)}"></div>
       </div>
       <p class="muted">الفاتورة بتعتبر متأخرة بعد المدة دي من تاريخ إصدارها. دي المدة الافتراضية — تقدر تحدد مدة مختلفة لكل عميل من صفحة العملاء.</p>
@@ -2884,6 +2889,8 @@ A.saveSettings = async () => {
     QOYOD_API_KEY: $('#s-qoyod').value.trim(), TELEGRAM_BOT_TOKEN: $('#s-tg').value.trim(),
     GEOFENCE_METERS: $('#s-geo').value, VISIT_GAP_DAYS: $('#s-gap').value,
     OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim(),
+    PRIO_BIG_OVERDUE: normDigits($('#s-prio-big').value) || '5000',
+    PRIO_CHURN_DAYS: normDigits($('#s-prio-churn').value) || '45',
     CURRENCY: $('#s-currency').value, PAYMENT_TERMS_DAYS: $('#s-terms').value,
     TRACK_ENABLED: $('#s-track').checked ? 'TRUE' : 'FALSE',
     TRACK_MIN_MINUTES: $('#s-track-min').value, TRACK_MIN_METERS: $('#s-track-m').value,

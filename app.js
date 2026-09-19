@@ -65,6 +65,8 @@ const S = {
 const A = {}; // مسجل الأحداث للأزرار
 window.A = A;
 
+/** حد "لازم النهارده" — لازم يبقى زي priorityLabel في Planner.gs */
+const PRIO_URGENT = 60;
 const DAY_NAMES = ['الجمعة', 'السبت', 'الحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس'];
 const LEAD_STAGES = ['جديد', 'تم التواصل', 'مهتم', 'اتحول لعميل', 'مش مهتم'];
 
@@ -973,7 +975,7 @@ function viewToday() {
   else html += sorted.map(c => custCard(c, false)).join('');
 
   // أولويات خارج خط سير اليوم
-  const urgent = myCustomers().filter(c => Number(c.visit_day) !== dayIdx && Number(c.priority_score) >= 70)
+  const urgent = myCustomers().filter(c => Number(c.visit_day) !== dayIdx && Number(c.priority_score) >= PRIO_URGENT)
     .sort((a, b) => Number(b.priority_score) - Number(a.priority_score)).slice(0, 5);
   if (urgent.length) {
     html += '<div class="section-title"><span>🔥 عملاء أولوية عالية خارج خط سير اليوم</span></div>';
