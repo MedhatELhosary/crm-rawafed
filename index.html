@@ -34,7 +34,21 @@
     var FIXED = false;
     window.crmRepair = function () {
       if (FIXED) return; FIXED = true;
-      try { localStorage.clear(); } catch (e) {}
+      /* الشغل اللي لسه مش على السيرفر ممنوع يتمسح — الطابور والزيارة
+         المفتوحة ونقط التتبع دي بالظبط الحاجات اللي مش موجودة في أي
+         مكان تاني. قبل كده كان بيتمسح الكل والنص بيقول إن مفيش حاجة
+         بتضيع، وده كان بيودّي بيوم شغل كامل. */
+      var KEEP = ['crm_queue', 'crm_failed', 'crm_live_visit', 'crm_track_buf'];
+      try {
+        var saved = {};
+        KEEP.forEach(function (k) {
+          try { var v = localStorage.getItem(k); if (v !== null) saved[k] = v; } catch (e) {}
+        });
+        localStorage.clear();
+        Object.keys(saved).forEach(function (k) {
+          try { localStorage.setItem(k, saved[k]); } catch (e) {}
+        });
+      } catch (e) {}
       try { sessionStorage.clear(); } catch (e) {}
       var done = function () { location.reload(); };
       try {
@@ -61,7 +75,8 @@
         '<div style="font-size:44px">🛠️</div>' +
         '<h2 style="margin:.6rem 0">التطبيق مش راضي يفتح</h2>' +
         '<p style="color:#5d6a7a;line-height:1.8">في حاجة اتخربت في البيانات المحفوظة على الموبايل. ' +
-        'اضغط الزرار ده — هيمسح المحفوظ على جهازك بس، وكل شغلك محفوظ على السيرفر ومش هيضيع.</p>' +
+        'اضغط الزرار ده — هيمسح البيانات المخزنة بس. ' +
+        '<b>أي زيارة أو تحصيل لسه مترفعش هيفضل محفوظ</b> وهيترفع أول ما النت يرجع.</p>' +
         '<button onclick="crmRepair()" style="background:#1f5fd0;color:#fff;border:0;border-radius:10px;' +
         'padding:.8rem 1.6rem;font-size:1rem;font-weight:700;cursor:pointer">تصليح وإعادة تشغيل</button>' +
         '<p style="color:#8a94a3;font-size:.8rem;margin-top:1.2rem">' + (why || '') + '</p></div>';

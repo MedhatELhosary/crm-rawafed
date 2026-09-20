@@ -57,6 +57,7 @@ const S = {
   device: readStr('crm_device'),
   data: readLS('crm_boot', null),
   queue: readLS('crm_queue', []),
+  failed: readLS('crm_failed', []),
   liveVisit: readLS('crm_live_visit', null),
   tab: 'today', adminTab: 'dash',
   custFilter: '', custDay: 'all', leadStage: 'all',
@@ -359,18 +360,86 @@ function qpush(action, payload) {
 // من غير القفل ده ممكن اتنين يشتغلوا مع بعض ويبعتوا نفس الطابور مرتين.
 let _flushing = false;
 
+/** أقصى عدد عمليات نبعتها في المرة — لازم يساوي أو يقل عن حد السيرفر */
+const FLUSH_BATCH = 10;
+
+/** اسم العملية بالعربي — بيظهر في قايمة اللي اترفض */
+function actionLabel(a) {
+  return {
+    quickVisit: 'زيارة', saveCollection: 'سند قبض', saveOrder: 'طلب',
+    addLead: 'ليد جديد', updateLead: 'تعديل ليد', setCustomerLocation: 'لوكيشن عميل'
+  }[a] || a;
+}
+
+/** رجّع المرفوضة للطابور — بعد ما الأدمن يصلّح السبب مثلًا */
+A.retryFailed = () => {
+  if (!(S.failed || []).length) return;
+  S.queue = S.queue.concat(S.failed.map(f => ({ action: f.action, payload: f.payload, ts: f.ts })));
+  S.failed = [];
+  save('crm_queue', S.queue);
+  save('crm_failed', S.failed);
+  render();
+  qflush();
+};
+
+A.clearFailed = () => {
+  if (!confirm('متأكد؟ العمليات دي هتتشال من القايمة ومش هتترفع.')) return;
+  S.failed = [];
+  save('crm_failed', S.failed);
+  render();
+};
+
+/**
+ * رفع الطابور.
+ *
+ * القاعدة: **مبنمسحش غير اللي السيرفر أكّد إنه وصل**. قبل كده كنا بنمسح
+ * الدفعة كلها لمجرد إن الطلب رجع، والسيرفر كان بيرجّع ok:true دايمًا —
+ * فعملية مرفوضة كانت بتختفي والمندوب يشوف رسالة نجاح.
+ *
+ * واللي بيترفض رفض منطقي (مش عطل شبكة) بينتقل لقايمة "محتاجة تدخّل"
+ * بدل ما يفضل يتعاد للأبد ويعطّل اللي وراه.
+ */
 async function qflush() {
   if (_flushing || !S.queue.length || !navigator.onLine) return;
   _flushing = true;
-  const batch = S.queue.slice();
   try {
-    await api('syncOffline', { queue: batch }, { quiet: true });
-    S.queue = S.queue.slice(batch.length);
+    const batch = S.queue.slice(0, FLUSH_BATCH);
+    const res = await api('syncOffline', { queue: batch }, { quiet: true });
+    const byId = {};
+    (res.results || []).forEach(r => { if (r.op_id) byId[r.op_id] = r; });
+
+    const stillQueued = [];
+    const rejected = [];
+    batch.forEach(item => {
+      const r = byId[(item.payload && item.payload.op_id) || ''];
+      if (!r) { stillQueued.push(item); return; }       // السيرفر ماردش عليها — نعيد
+      if (r.ok) return;                                  // وصلت — تتشال
+      if (r.retryable) { stillQueued.push(item); return; }
+      rejected.push(Object.assign({}, item, { error: r.error || 'اترفضت' }));
+    });
+
+    // اللي اتبعت وهو في الطابور أثناء الإرسال لازم يفضل
+    S.queue = stillQueued.concat(S.queue.slice(batch.length));
     save('crm_queue', S.queue);
-    toast('✅ اترفعت ' + batch.length + ' عملية كانت متخزنة أوفلاين', 'ok');
-    refresh(true);
+    if (rejected.length) {
+      S.failed = (S.failed || []).concat(rejected).slice(-50);
+      save('crm_failed', S.failed);
+    }
+
+    const done = batch.length - stillQueued.length - rejected.length;
+    if (done) toast('✅ اترفعت ' + done + ' عملية كانت متخزنة أوفلاين', 'ok');
+    if (rejected.length) {
+      toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
+    }
+    render();
+    if (done) refresh(true);
+    // فيه باقي؟ نكمّل
+    if (S.queue.length && (done || stillQueued.length < batch.length)) {
+      _flushing = false;
+      return qflush();
+    }
   } catch (e) {
-    /* هنحاول تاني بعدين — ولو كان اتنفذ فعلًا، مفتاح العملية بيمنع التكرار */
+    /* عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة */
   } finally {
     _flushing = false;
   }
@@ -846,6 +915,26 @@ A.statementRun = async (custId) => {
 };
 A.printStatement = () => { window.print(); };
 
+// ================== ربط تليجرام ==================
+/**
+ * بيطلب كود ربط لمرة واحدة. الربط بقى بكود بدل اسم المستخدم — قبل كده
+ * أي حد يعرف اسم مندوب كان يقدر يربط نفسه بحسابه ويستقبل بيانات عملائه.
+ */
+A.tgLinkCode = async () => {
+  try {
+    const r = await api('telegramLinkCode', {});
+    openModal(`
+      <h2>🔗 كود ربط تليجرام</h2>
+      <p class="modal-sub">افتح بوت الشركة على تليجرام وابعتله الرسالة دي بالظبط:</p>
+      <div class="card" style="text-align:center;background:var(--blue-soft)">
+        <div style="font-size:26px;font-weight:800;letter-spacing:3px;direction:ltr">/start ${esc(r.code)}</div>
+      </div>
+      <p class="muted">الكود ده يخصك انت بس، بيشتغل <b>مرة واحدة</b>، وصلاحيته <b>${r.minutes} دقايق</b>.
+      متديهوش لحد.</p>
+      <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">تمام</button></div>`);
+  } catch (e) { toast(e.msg || 'مش قادر أجيب الكود', 'err'); }
+};
+
 // ==================== [ rep.js ] ====================
 /* CRM روافد — واجهة المندوب: اليوم، المتابعات، العملاء، سجلي، حسابي */
 
@@ -1109,7 +1198,10 @@ A.saveLocAndCheckin = async (custId, saveLoc) => {
     c.lat = pos.lat; c.lng = pos.lng; c.location_source = 'GPS من الموقع';
     added = true;
     try { await api('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
-    catch (e) { if (e.offline) qpush('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); }
+    catch (e) {
+      if (!e.offline) return;
+      if (!qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' })) return;
+    }
   }
   await doCheckin(c, pos, added);
 };
@@ -1119,7 +1211,12 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
   openMapPicker(c.lat, c.lng, async (ll) => {
     c.lat = ll.lat; c.lng = ll.lng; c.location_source = 'تحديد يدوي على الخريطة';
     try { await api('setCustomerLocation', { customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
-    catch (e) { if (e.offline) { qpush('setCustomerLocation', { customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' }); toast('اتحفظ محليًا وهيترفع لما النت يرجع'); } else toast(e.msg || 'خطأ', 'err'); }
+    catch (e) {
+      if (!e.offline) return toast(e.msg || 'خطأ', 'err');
+      if (qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' })) {
+        toast('اتحفظ محليًا وهيترفع لما النت يرجع');
+      }
+    }
     if (thenCheckin) await doCheckin(c, A._pendingPos, true);
     else render();
   });
@@ -1234,11 +1331,14 @@ A.checkoutSave = async () => {
   }
   const photos = (A._visitPhotos || []).slice();
   const outTime = new Date().toTimeString().slice(0, 5);
+  // المفتاح بيتولّد دلوقتي — قبل أي محاولة إرسال. لو الرد ضاع بعد ما
+  // السيرفر نفّذ، النسخة اللي هتتعاد بتحمل نفس المفتاح فالسيرفر يعرفها.
+  const opKey = (lv && lv.op_id) || opId();
   if (S.myPos) pushTrackPoint(S.myPos.lat, S.myPos.lng, S.myPos.acc, 'انصراف: ' + (c ? c.name : ''));
   closeModal();
   try {
     if (lv.local || !lv.visit_id) throw { offline: true };
-    await api('checkout', Object.assign({ visit_id: lv.visit_id }, form));
+    await api('checkout', Object.assign({ visit_id: lv.visit_id, op_id: opKey }, form));
     toast('✅ الزيارة اتسجلت بنجاح', 'ok');
     // رفع الصور بعد ما الزيارة اتسجلت
     for (let i = 0; i < photos.length; i++) {
@@ -1252,14 +1352,18 @@ A.checkoutSave = async () => {
     if (e.offline) {
       const [h1, m1] = lv.checkin_time.split(':').map(Number);
       const [h2, m2] = outTime.split(':').map(Number);
-      qpush('quickVisit', Object.assign({
+      const ok = qpush('quickVisit', Object.assign({
+        op_id: opKey,
         customer_id: lv.customer_id, date: new Date().toISOString().slice(0, 10),
         checkin_time: lv.checkin_time, checkout_time: outTime,
         duration_min: Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)),
         lat: lv.lat, lng: lv.lng, distance_m: lv.distance_m, visit_type: 'ميدانية'
       }, form));
+      // لو الحفظ المحلي فشل، الزيارة لازم تفضل مفتوحة — مسحها هنا كان
+      // بيضيّع تقرير المندوب وهو شايف رسالة نجاح خضرا
+      if (!ok) { qflush(); return; }
       toast('📴 التقرير اتحفظ محليًا وهيترفع تلقائي', 'ok');
-    } else toast(e.msg || 'خطأ', 'err');
+    } else { toast(e.msg || 'خطأ', 'err'); return; }
   }
   if (c && form.status === 'تمت') c.last_visit_date = new Date().toISOString().slice(0, 10);
   S.liveVisit = null;
@@ -1543,6 +1647,7 @@ A.quickCall = (custId) => {
 };
 A.quickCallSave = async (custId) => {
   const payload = {
+    op_id: opId(),                       // مفتاح واحد للمحاولة الأونلاين وللإعادة
     customer_id: custId, visit_type: 'هاتفية', status: 'تمت',
     outcome: $('#v-outcome').value, report: $('#v-report').value.trim(),
     date: new Date().toISOString().slice(0, 10)
@@ -1550,7 +1655,7 @@ A.quickCallSave = async (custId) => {
   closeModal();
   try { await api('quickVisit', payload); toast('✅ اتسجلت', 'ok'); refresh(true); }
   catch (e) {
-    if (e.offline) { qpush('quickVisit', payload); toast('📴 اتحفظت محليًا', 'ok'); }
+    if (e.offline) { if (qpush('quickVisit', payload)) toast('📴 اتحفظت محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -1611,6 +1716,7 @@ A.leadPickLoc = () => {
 };
 A.leadSave = async () => {
   const payload = {
+    op_id: opId(),
     name: $('#l-name').value.trim(), phone: $('#l-phone').value.trim(), address: $('#l-address').value.trim(),
     source: $('#l-source').value, notes: $('#l-notes').value.trim(),
     lat: A._leadLoc ? A._leadLoc.lat : '', lng: A._leadLoc ? A._leadLoc.lng : ''
@@ -1619,7 +1725,7 @@ A.leadSave = async () => {
   closeModal();
   try { await api('addLead', payload); toast('✅ الليد اتضاف', 'ok'); refresh(true); }
   catch (e) {
-    if (e.offline) { qpush('addLead', payload); toast('📴 اتحفظ محليًا', 'ok'); }
+    if (e.offline) { if (qpush('addLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -1637,14 +1743,14 @@ A.leadStageForm = (id) => {
     </div>`);
 };
 A.leadStageSave = async (id) => {
-  const payload = { id: id, stage: $('#l-stage').value, notes: $('#l-notes').value.trim() };
+  const payload = { op_id: opId(), id: id, stage: $('#l-stage').value, notes: $('#l-notes').value.trim() };
   closeModal();
   try {
     await api('updateLead', payload);
     toast(payload.stage === 'اتحول لعميل' ? '🎉 مبروك — الليد بقى عميل!' : '✅ اتحدث', 'ok');
     refresh(true);
   } catch (e) {
-    if (e.offline) { qpush('updateLead', payload); toast('📴 اتحفظ محليًا', 'ok'); }
+    if (e.offline) { if (qpush('updateLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -1705,9 +1811,21 @@ function viewMe() {
     </div>
     <div class="card">
       <h3>📲 بوت تليجرام</h3>
-      <p class="muted">عشان توصلك خطة يومك كل صبح: افتح البوت وابعتله<br><b>/start ${esc(S.user.username || '')}</b></p>
+      <p class="muted">عشان توصلك خطة يومك كل صبح على تليجرام، اطلب كود ربط وابعته للبوت.
+      الكود بيشتغل مرة واحدة ولمدة 10 دقايق.</p>
+      <button class="btn ghost full" onclick="A.tgLinkCode()">🔗 اطلب كود ربط</button>
     </div>
     ${S.queue.length ? '<div class="card"><h3>⏳ عمليات مستنية النت (' + S.queue.length + ')</h3><button class="btn sm ghost" onclick="A.doRefresh()">حاول ترفعها دلوقتي</button></div>' : ''}
+    ${(S.failed || []).length ? `<div class="card" style="border-right:4px solid var(--red)">
+      <h3>⚠️ عمليات السيرفر رفضها (${S.failed.length})</h3>
+      <p class="muted">دي اتحفظت عندك بس السيرفر رفضها — لازم تتصرف فيها، مش هتترفع لوحدها.</p>
+      ${S.failed.slice(-10).reverse().map(f => `<div class="stat-line">
+        <span>${esc(actionLabel(f.action))}<div class="muted" style="font-size:11px">${esc(f.error || '')}</div></span>
+        <b class="muted" style="font-size:11px">${esc(String(f.ts ? new Date(f.ts).toLocaleString('ar-EG') : ''))}</b>
+      </div>`).join('')}
+      <button class="btn sm ghost mt" onclick="A.retryFailed()">حاول ترفعها تاني</button>
+      <button class="btn sm outline mt" onclick="A.clearFailed()">فهمت — شيلها من القايمة</button>
+    </div>` : ''}
     <button class="btn red full mt" onclick="A.logout()">تسجيل خروج</button>
     <p class="muted mt" style="text-align:center">CRM روافد — آخر تحديث بيانات: ${esc((S.data.serverTime || ''))}</p>`;
 }
@@ -2210,7 +2328,7 @@ A.orderSave = async (custId) => {
   const notes = document.getElementById('ord-notes');
   if (notes) o.notes = notes.value.trim();
   if (!o.items.length) return toast('ضيف أصناف الأول', 'err');
-  const payload = { customer_id: custId, items: o.items, notes: o.notes, date: new Date().toISOString().slice(0, 10) };
+  const payload = { op_id: opId(), customer_id: custId, items: o.items, notes: o.notes, date: new Date().toISOString().slice(0, 10) };
   closeModal();
   try { const r = await api('saveOrder', payload); toast(r.message, 'ok'); }
   catch (e) {
@@ -2295,6 +2413,7 @@ A.collectSave = async (custId) => {
 
   const now = new Date();
   const payload = {
+    op_id: opId(),                       // مفتاح واحد للمحاولة الأونلاين وللإعادة
     customer_id: custId, voucher: voucher, amount: amount, method: method,
     reference: ($('#col-ref') || {}).value || '', notes: $('#col-notes').value.trim(),
     date: todayISO(now)
