@@ -230,41 +230,76 @@ function deviceLabel() {
  *  3) عداد مش true/false — عشان طلبين مع بعض ميقفلوش الطبقة على بعض،
  *     وحارس وقت بيفتحها غصب لو طلب علّق، عشان التطبيق ميتقفلش أبدًا.
  */
-var _busyCount = 0, _busyTimer = null, _busyGuard = null;
-var BUSY_SHOW_AFTER = 220;      // بعد قد إيه الرمادي يبان
-var BUSY_MAX = 25000;           // أقصى وقت تفضل فيه مقفولة مهما حصل
+var BUSY_MAX = 25000;           // أقصى وقت يفضل فيه الزرار مقفول مهما حصل
 
-function busyEl() { return document.getElementById('busy-root'); }
+/**
+ * الزرار اللي المستخدم دوس عليه دلوقتي.
+ *
+ * بنمسكه في مرحلة الالتقاط (capture) عشان يوصلنا قبل ما الـ onclick
+ * يشتغل — وبكده أول نداء سيرفر جوه الأمر ده يعرف زراره من غير ما
+ * نعدّل مية نداء في التطبيق.
+ */
+var _clickedBtn = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('button, .btn') : null;
+    _clickedBtn = (b && !b.disabled) ? b : null;
+  }, true);
+}
 
+var _busyCount = 0, _busyStack = [];
+
+function btnBusyOn(btn, label) {
+  if (!btn || btn.dataset.busy === '1') return;
+  btn.dataset.busy = '1';
+  btn.dataset.busyLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  if (label) btn.textContent = label;
+  // شبكة أمان: لو النداء علّق ومرجعش أبدًا، الزرار مايفضلش مقفول للأبد
+  btn._busyTimer = setTimeout(() => btnBusyOff(btn), BUSY_MAX);
+}
+
+function btnBusyOff(btn) {
+  if (!btn || btn.dataset.busy !== '1') return;
+  clearTimeout(btn._busyTimer);
+  btn.disabled = false;
+  btn.classList.remove('is-loading');
+  if (btn.dataset.busyLabel !== undefined) btn.innerHTML = btn.dataset.busyLabel;
+  delete btn.dataset.busy;
+  delete btn.dataset.busyLabel;
+}
+
+/**
+ * قفل الضغط المتكرر.
+ *
+ * كان طبقة رمادية بتغطي الشاشة كلها. المشكلة إنها بتحوّل أي نداء بطيء
+ * لشاشة متجمدة — المستخدم مش عارف لو التطبيق شغال ولا وقع، ومش قادر
+ * يعمل أي حاجة تانية. دلوقتي الزرار اللي اتداس عليه بس هو اللي بيتقفل،
+ * وبيفتح تاني لما الأمر يخلص أو لما الشاشة تتبدّل (render بيعيد بناء
+ * الأزرار من الأساس).
+ */
 function busyOn(label) {
   _busyCount++;
-  if (_busyCount > 1) return;
-  const el = busyEl();
-  if (!el) return;
-  const t = document.getElementById('busy-text');
-  if (t) t.textContent = label || 'جاري التحميل...';
-  el.classList.add('blocking');                 // المنع بيبدأ فورًا
-  el.setAttribute('aria-hidden', 'false');
-  clearTimeout(_busyTimer);
-  _busyTimer = setTimeout(() => el.classList.add('on'), BUSY_SHOW_AFTER);
-  clearTimeout(_busyGuard);
-  _busyGuard = setTimeout(() => { _busyCount = 0; busyHide(); }, BUSY_MAX);
+  const btn = _clickedBtn;
+  _clickedBtn = null;                 // كل نداء بياخد الزرار مرة واحدة بس
+  _busyStack.push(btn || null);
+  if (btn) btnBusyOn(btn, label);
 }
 
 function busyOff() {
   if (_busyCount > 0) _busyCount--;
-  if (_busyCount > 0) return;
-  busyHide();
+  const btn = _busyStack.pop();
+  if (btn) btnBusyOff(btn);
 }
 
+/** بيفتح كل الأزرار المقفولة — بيتنادى بعد إعادة الرسم */
 function busyHide() {
-  clearTimeout(_busyTimer); _busyTimer = null;
-  clearTimeout(_busyGuard); _busyGuard = null;
-  const el = busyEl();
-  if (!el) return;
-  el.classList.remove('on');
-  el.classList.remove('blocking');
-  el.setAttribute('aria-hidden', 'true');
+  _busyCount = 0;
+  _busyStack = [];
+  if (typeof document === 'undefined') return;
+  const list = document.querySelectorAll('[data-busy="1"]');
+  for (let i = 0; i < list.length; i++) btnBusyOff(list[i]);
 }
 
 /** للعمليات اللي مش نداء سيرفر (زي رسم صورة السند) */
@@ -272,6 +307,46 @@ async function withBusy(label, fn) {
   busyOn(label);
   try { return await fn(); } finally { busyOff(); }
 }
+
+/**
+ * رسالة مفهومة من رد السيرفر لما ميكونش JSON.
+ *
+ * ده كان أخطر عيب تشخيصي في التطبيق: أي رد مش JSON — صفحة خطأ من
+ * جوجل، وقت التنفيذ خلص، الحصة اليومية اتسدّت، النشر محتاج تصريح —
+ * كله كان بيتقال عنه "مفيش نت". فالمستخدم بيبص على الموبايل ويلاقي
+ * النت شغال، وإحنا مش عارفين حصل إيه.
+ */
+function serverErrText(status, body) {
+  const t = String(body || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/Exceeded maximum execution time/i.test(t)) return 'السيرفر وقف عند الحد الأقصى لوقت التنفيذ — العملية تقيلة';
+  if (/(Service invoked too many times|quota|Too many|limit)/i.test(t)) return 'السيرفر وصل لحد الاستخدام اليومي — بيرجع لوحده بعد منتصف الليل';
+  if (/(Authorization is required|Sign in|Google Account|permission)/i.test(t)) return 'النشر محتاج تصريح من تاني — افتح Apps Script واعمل Deploy جديد';
+  if (/(Script function not found|not found)/i.test(t) || status === 404) return 'لينك السيرفر غلط أو النشر اتشال (404)';
+  if (status === 403) return 'النشر مش مسموح للجميع — غيّر Who has access لـ Anyone';
+  if (status >= 500) return 'السيرفر رد بخطأ ' + status;
+  return 'السيرفر رد برد غير متوقع (' + status + ')' + (t ? ': ' + t.slice(0, 140) : '');
+}
+
+/** آخر وقت تنفيذ على السيرفر (بالملي ثانية) — بيقوله السيرفر نفسه */
+var LAST_SERVER_MS = 0;
+
+/** آخر خطأ سيرفر — بيتعرض في شاشة الفحص عشان نعرف المشكلة بالظبط */
+var LAST_ERR = null;
+function noteErr(kind, detail, ms) {
+  LAST_ERR = { kind: kind, detail: String(detail || '').slice(0, 300),
+               ms: ms, at: new Date().toLocaleString('ar-EG') };
+  try { localStorage.setItem('crm_last_err', JSON.stringify(LAST_ERR)); } catch (e) {}
+}
+
+/** مهلة النداء — بعدها بنعتبره فشل ونحط العملية في الطابور */
+var API_TIMEOUT = 40000;
+var SLOW_ACTIONS = {
+  backupNow: 1, archiveNow: 1, syncProducts: 1, runQoyodSync: 1, pushPending: 1,
+  bulkImport: 1, finishImport: 1, importQoyodCustomers: 1, recomputeInvoiceDetails: 1,
+  backfillInvoiceDetails: 1, resetTestData: 1, resetPreview: 1, dedupeDocs: 1,
+  purgePhantoms: 1, runPlanner: 1, fixVisitIssues: 1, pushExpenseJournal: 1,
+  bankMatch: 1, sendMonthSummaryNow: 1, sendRepReportsNow: 1, sendDailySummary: 1
+};
 
 async function api(action, payload, opts) {
   if (!API_URL || API_URL.indexOf('http') !== 0) throw { fatal: 'لسه محددتش لينك السيرفر في ملف config.js' };
@@ -283,12 +358,38 @@ async function api(action, payload, opts) {
   // بدل ما تتفتح وتتقفل تاني قدام المستخدم.
   try {
     let res;
+    const t0 = Date.now();
+    let resp = null, text = '';
     try {
-      const resp = await fetch(API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: S.token }, payload || {})) });
-      res = await resp.json();
+      const ms = (opts && opts.timeout) || (SLOW_ACTIONS[action] ? 180000 : API_TIMEOUT);
+      const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
+      try {
+        resp = await fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify(Object.assign({ action, token: S.token }, payload || {})),
+          signal: ctrl ? ctrl.signal : undefined
+        });
+        text = await resp.text();
+      } finally { if (timer) clearTimeout(timer); }
     } catch (e) {
-      throw { offline: true };
+      // ده الفشل الحقيقي الوحيد اللي يستاهل اسم "مفيش نت":
+      // المتصفح مقدرش يوصل للسيرفر خالص، أو المهلة خلصت
+      const cut = e && e.name === 'AbortError';
+      noteErr(cut ? 'مهلة' : 'شبكة', action + ' — ' + (cut ? 'عدّى المهلة' : (e && e.message) || ''), Date.now() - t0);
+      throw { offline: true, timeout: cut };
     }
+    // وصلنا للسيرفر فعلًا — أي مشكلة من هنا مش مشكلة نت
+    try { res = JSON.parse(text); }
+    catch (e) {
+      const m = serverErrText(resp.status, text);
+      noteErr('السيرفر', action + ' — ' + m, Date.now() - t0);
+      // offline كمان عشان العملية تدخل الطابور بدل ما تضيع: إحنا مش
+      // عارفين لو السيرفر نفّذها ولا لأ، ومفتاح العملية هو اللي بيمنع
+      // التكرار لما تتعاد
+      throw { offline: true, server: true, status: resp.status, msg: m };
+    }
+    if (res && res.ms) LAST_SERVER_MS = res.ms;
     // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
     //
     // مهم جدًا: الطرد بيحصل **بس** لما التجديد نفسه يترفض. قبل كده
@@ -726,9 +827,13 @@ async function doRefreshOnce(silent) {
     syncLogo();       // اللوجو بيتحمّل مرة واحدة بس لو اتغير
     syncProducts();   // وكذلك كتالوج الأصناف
   } catch (e) {
-    if (!silent && !e.offline) toast(e.msg || e.fatal || 'مشكلة في التحديث', 'err');
-    if (e.offline && !silent) toast(e.busy ? '⏳ السيرفر مشغول — شغال بآخر بيانات محفوظة'
-                                            : '📴 مفيش نت — شغال بآخر بيانات محفوظة');
+    if (!silent) {
+      // الرسالة الحقيقية أهم من أي وصف عام — لو السيرفر قال سبب، نقوله
+      if (e.msg || e.fatal) toast(e.msg || e.fatal, 'err');
+      else if (e.timeout) toast('⏱️ السيرفر أخد وقت طويل ومردش — شغال بآخر بيانات محفوظة', 'err');
+      else if (e.offline) toast('📴 مفيش نت — شغال بآخر بيانات محفوظة');
+      else toast('مشكلة في التحديث', 'err');
+    }
   }
   S.loading = false;
   render();
@@ -858,6 +963,59 @@ A.mapConfirm = () => {
   cb({ lat: +ll.lat.toFixed(6), lng: +ll.lng.toFixed(6) });
 };
 
+
+/**
+ * فحص الاتصال — بيقيس الوصول للسيرفر ويقول النسخة المنشورة.
+ *
+ * الهدف منها إن المستخدم يقدر يقول لنا **بالظبط** إيه اللي بيحصل بدل
+ * "التطبيق مش شغال": السيرفر رد ولا لأ، في كام ثانية، وأي نسخة منشورة.
+ */
+A.ping = async () => {
+  const box = document.getElementById('diag-out');
+  if (box) box.textContent = 'بفحص...';
+  const t0 = Date.now();
+  let line = '';
+  try {
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+    let resp, text;
+    try {
+      resp = await fetch(API_URL, { signal: ctrl ? ctrl.signal : undefined });
+      text = await resp.text();
+    } finally { if (timer) clearTimeout(timer); }
+    const ms = Date.now() - t0;
+    let j = null;
+    try { j = JSON.parse(text); } catch (e) {}
+    if (j && j.ok) {
+      line = '✅ السيرفر رد في ' + ms + ' جزء من الثانية' +
+             '\nالنسخة المنشورة: ' + (j.build || '(قديمة — مفيش رقم نسخة)') +
+             '\nساعة السيرفر: ' + (j.time || '');
+    } else {
+      line = '❌ السيرفر رد بحاجة مش مفهومة بعد ' + ms + ' جزء من الثانية' +
+             '\n' + serverErrText(resp.status, text);
+    }
+  } catch (e) {
+    const ms = Date.now() - t0;
+    line = (e && e.name === 'AbortError')
+      ? '❌ السيرفر مردش خالص خلال 30 ثانية'
+      : '❌ مقدرتش أوصل للسيرفر بعد ' + ms + ' جزء من الثانية';
+  }
+  if (LAST_SERVER_MS) line += '\nآخر عملية اتنفذت على السيرفر في: ' + LAST_SERVER_MS + ' جزء من الثانية';
+  let le = LAST_ERR;
+  if (!le) { try { le = JSON.parse(localStorage.getItem('crm_last_err') || 'null'); } catch (e) {} }
+  if (le) line += '\n\nآخر خطأ (' + le.at + ')\nالنوع: ' + le.kind + '\n' + le.detail +
+                  (le.ms ? '\nاستغرق: ' + le.ms + ' جزء من الثانية' : '');
+  if (box) box.textContent = line;
+  else alert(line);
+};
+
+function viewDiag() {
+  return '<div class="card"><h3>🩺 فحص الاتصال بالسيرفر</h3>' +
+    '<p class="muted sm">لو التطبيق بطيء أو بيقول مفيش نت والنت شغال — دوس فحص وابعتلنا اللي هيظهر.</p>' +
+    '<button class="btn full" onclick="A.ping()">افحص الاتصال دلوقتي</button>' +
+    '<pre id="diag-out" class="diag-out"></pre></div>';
+}
+
 // ================== الدخول والخروج ==================
 /**
  * الزيارة المفتوحة بقت بتعيش بعد الخروج (عشان متضيعش لو الجلسة انتهت
@@ -909,7 +1067,7 @@ A.login = async () => {
     if (S.user.role === 'rep') await checkGpsPermission();
     ensureTracking(true);
   } catch (e) {
-    toast(e.msg || e.fatal || (e.busy ? 'السيرفر مشغول — جرب تاني بعد شوية'
+    toast(e.msg || e.fatal || (e.timeout ? 'السيرفر مردش في الوقت المحدد — جرب تاني'
                                       : e.offline ? 'مفيش نت — جرب تاني' : 'حصل خطأ'), 'err');
     btn.disabled = false; btn.textContent = 'دخول';
   }
@@ -2112,6 +2270,7 @@ function viewMe() {
       <button class="btn sm ghost mt" onclick="A.retryFailed()">حاول ترفعها تاني</button>
       <button class="btn sm outline mt" onclick="A.clearFailed()">فهمت — شيلها من القايمة</button>
     </div>` : ''}
+    ${viewDiag()}
     <button class="btn red full mt" onclick="A.logout()">تسجيل خروج</button>
     <p class="muted mt" style="text-align:center">CRM روافد — آخر تحديث بيانات: ${esc((S.data.serverTime || ''))}</p>`;
 }

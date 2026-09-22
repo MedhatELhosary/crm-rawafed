@@ -2725,6 +2725,7 @@ function adSettings() {
         <button class="btn red" onclick="A.logout()">🚪 تسجيل خروج</button>
       </div>
     </div>
+    ${viewDiag()}
     <div class="card">
       <h3>🏢 هوية الشركة</h3>
       <div class="grid2">

@@ -236,30 +236,30 @@ tr:last-child td { border-bottom: none; }
 /* ---------- طبقة التحميل ----------
    بتقفل الشاشة بمجرد ما أي عملية تبدأ (عشان متتضغطش الأزرار تاني)،
    والخلفية الرمادية بتظهر بعد لحظة بس — عشان الطلب السريع ميعملش وميض. */
-#busy-root {
-  position: fixed; inset: 0; z-index: 300;
-  display: none; align-items: center; justify-content: center;
-  background: rgba(15, 39, 68, .42);
-  opacity: 0; transition: opacity .18s ease;
+/* الزرار اللي بينفّذ أمر: بيتقفل وبيلف — من غير ما يغطي الشاشة */
+.btn.is-loading, button.is-loading {
+  position: relative; opacity: .75; cursor: progress;
+  color: transparent !important;
 }
-#busy-root.blocking { display: flex; }        /* بيمنع الضغط فورًا وهو لسه شفاف */
-#busy-root.on { opacity: 1; }                 /* الرمادي بيبان بعد لحظة */
-.busy-box {
-  display: flex; flex-direction: column; align-items: center; gap: 12px;
-  background: var(--card); border-radius: var(--radius);
-  padding: 22px 26px; box-shadow: 0 8px 30px rgba(15, 39, 68, .25);
-  min-width: 150px; text-align: center;
-}
-.spinner {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: 3px solid var(--border); border-top-color: var(--blue);
+.btn.is-loading::after, button.is-loading::after {
+  content: ''; position: absolute; inset: 0; margin: auto;
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  color: var(--text);
   animation: spin .7s linear infinite;
 }
-.busy-text { font-size: 13.5px; color: var(--muted); font-weight: 600; }
+button:disabled { opacity: .6; cursor: not-allowed; }
+.diag-out {
+  white-space: pre-wrap; word-break: break-word; direction: ltr; text-align: left;
+  background: var(--card2, #f6f7f9); border-radius: 10px; padding: .7rem;
+  font-size: 12px; line-height: 1.7; margin-top: .6rem; min-height: 2rem;
+}
 @keyframes spin { to { transform: rotate(360deg); } }
-/* اللي بيفضّل تقليل الحركة: الدايرة بتنبض بدل ما تلف */
+/* اللي بيفضّل تقليل الحركة: الزرار بينبض بدل ما يلف */
 @media (prefers-reduced-motion: reduce) {
-  .spinner { animation: pulse 1.2s ease-in-out infinite; border-top-color: var(--blue); }
+  .btn.is-loading::after, button.is-loading::after {
+    animation: pulse 1.2s ease-in-out infinite; border-top-color: currentColor;
+  }
 }
 
 /* ---------- المودال ---------- */
@@ -397,7 +397,7 @@ tr:last-child td { border-bottom: none; }
 .stmt-footer { text-align: center; font-size: 11px; color: #777; margin-top: 14px; }
 
 @media print {
-  #app, #modal-root, #toast-root, #busy-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
+  #app, #modal-root, #toast-root, .topbar, .bottomnav, .admin-tabs { display: none !important; }
   #print-area { display: block !important; }
   body { background: #fff; }
   /* عشان ألوان رأس الجدول واللوجو تطلع في الـ PDF مش أبيض وأسود */
