@@ -232,7 +232,7 @@ function deviceLabel() {
  */
 var _busyCount = 0, _busyTimer = null, _busyGuard = null;
 var BUSY_SHOW_AFTER = 220;      // بعد قد إيه الرمادي يبان
-var BUSY_MAX = 45000;           // أقصى وقت تفضل فيه مقفولة مهما حصل
+var BUSY_MAX = 25000;           // أقصى وقت تفضل فيه مقفولة مهما حصل
 
 function busyEl() { return document.getElementById('busy-root'); }
 
@@ -290,7 +290,14 @@ async function api(action, payload, opts) {
       throw { offline: true };
     }
     // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
+    //
+    // مهم جدًا: الطرد بيحصل **بس** لما التجديد نفسه يترفض. قبل كده
+    // النداء المعاد كان جوه نفس الـ try، فأي فشل فيه — السيرفر مشغول،
+    // انقطاع شبكة لحظة، حتى رفض منطقي عادي — كان بيقع في الـ catch
+    // ويتنفّذ doLogout(). ودي كانت سبب إن المندوب بيلاقي نفسه مطرود
+    // فجأة في نص اليوم ولازم يكتب اسمه ورقمه السري من الأول.
     if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
+      let renewed = false;
       if (S.device) {
         try {
           const r = await api('renew', { device: S.device }, { noRetry: true, quiet: true });
@@ -298,23 +305,38 @@ async function api(action, payload, opts) {
           S.user = r.user;
           writeLS('crm_token', S.token);
           save('crm_user', S.user);
-          return await api(action, payload, { noRetry: true, quiet: true });
-        } catch (e) { /* الجهاز اتلغى أو انتهت صلاحيته */ }
+          renewed = true;
+        } catch (e) {
+          // عطل شبكة مش رفض — الجلسة ممكن تكون لسه سليمة تمامًا،
+          // فمنطردش المندوب على عطل مؤقت
+          if (e.offline) throw { offline: true, busy: !!e.busy };
+        }
       }
+      // خارج الـ try عن قصد: فشل النداء ده يطلع للمستخدم زي أي خطأ
+      // عادي (والحمولة تدخل الطابور لو كانت عملية كتابة)
+      if (renewed) return await api(action, payload, Object.assign({}, opts || {}, { noRetry: true }));
       doLogout();
       toast('انتهت الجلسة — سجل دخول تاني', 'err');
       throw { fatal: 'انتهت الجلسة، سجل دخول تاني' };
     }
     // السيرفر مشغول بالمزامنة — نعيد المحاولة بهدوء بدل ما نزعج المندوب
     // بخطأ مش ذنبه. المزامنة بتاخد ثواني معدودة فمحاولتين كفاية.
-    if (res.busy && !(opts && opts.noBusyRetry)) {
+    if (res.busy) {
       const tries = (opts && opts.busyTry) || 0;
-      if (tries < 2) {
-        await new Promise(r => setTimeout(r, 1500 * (tries + 1)));
+      if (tries < 1 && !(opts && opts.noBusyRetry)) {
+        await new Promise(r => setTimeout(r, 1200));
         return await api(action, payload, Object.assign({}, opts, {
           busyTry: tries + 1, quiet: true
         }));
       }
+      // السيرفر رجّع busy قبل ما ينفّذ أي حاجة — يعني العملية متنفذتش
+      // بالتأكيد. ده بالظبط نفس وضع "مفيش نت"، فنرميها كده عشان
+      // العملية تدخل الطابور وتتعاد لوحدها، بدل ما المندوب يقف قدام
+      // شاشة مقفولة دقيقة كاملة وبعدين يشوف "حصل خطأ" ويفقد شغله.
+      // ومفتاح العملية هو اللي بيضمن إنها متتسجلش مرتين.
+      // msg موجودة عشان الشاشات اللي مش بتفحص offline (شاشات الأدمن مثلًا)
+      // تعرض السبب الحقيقي بدل كلمة "خطأ"
+      throw { offline: true, busy: true, msg: res.error || 'السيرفر مشغول — جرب تاني بعد شوية' };
     }
     if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
     return res;
@@ -328,27 +350,152 @@ async function api(action, payload, opts) {
  * بيحط العملية في طابور الأوفلاين. بيرجّع false لو مساحة الجهاز خلصت —
  * السندات بقت جواها صورة، فلازم المندوب يعرف إن الحفظ فشل مش يفتكره اتحفظ.
  */
-const QUEUE_MAX_BYTES = 2500000;   // ~2.5 ميجا — السندات فيها صور فالحد ده مهم
+/**
+ * ============================================================
+ *  مخزن الصور على الجهاز (IndexedDB)
+ * ============================================================
+ * الصور (سند القبض وصور الزيارة) كانت بتتحفظ جوه الطابور في
+ * localStorage. سقف localStorage حوالي 5 ميجا، والصورة الواحدة ممكن
+ * توصل 4 — يعني سند أو اتنين وتمتلي، وساعتها writeLS بتمسح بيانات
+ * التطبيق عشان تفضي مكان، فالمندوب يرجع يلاقي قايمة عملاء فاضية
+ * ومفيش نت يملّيها.
+ *
+ * دلوقتي: بيانات الطابور (صغيرة) تفضل في localStorage عشان تتقري
+ * فورًا وقت الإقلاع، والصور في IndexedDB — مساحتها مئات الميجا.
+ */
+var IDB_NAME = 'crm_rawafed', IDB_STORE = 'blobs', _idb = null;
+
+function idbOpen() {
+  if (_idb) return _idb;
+  _idb = new Promise((resolve, reject) => {
+    if (!self.indexedDB) return reject(new Error('IndexedDB مش متاحة'));
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => { _idb = null; reject(req.error || new Error('مش قادر أفتح المخزن')); };
+  });
+  return _idb;
+}
+
+function idbRun(mode, fn) {
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, mode);
+    const req = fn(tx.objectStore(IDB_STORE));
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('اتلغت'));
+    if (req) { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }
+    else tx.oncomplete = () => resolve(true);
+  }));
+}
+
+function blobPut(key, val) {
+  return idbRun('readwrite', st => st.put(val, key)).then(() => true).catch(() => false);
+}
+function blobGet(key) {
+  return idbRun('readonly', st => st.get(key)).catch(() => null);
+}
+function blobDel(key) {
+  return idbRun('readwrite', st => st.delete(key)).then(() => true).catch(() => false);
+}
+function blobKeys() {
+  return idbRun('readonly', st => st.getAllKeys()).catch(() => []);
+}
+
+/** الحقول اللي ممكن تكون صور — بتتشال من الطابور وتتحفظ لوحدها */
+var BLOB_FIELDS = ['receipt', 'photos', 'data', 'signature'];
+
+/** بيشيل الصور من الحمولة ويرجّعها لوحدها (أو null لو مفيش) */
+function takeBlobs(body) {
+  const out = {};
+  let found = false;
+  BLOB_FIELDS.forEach(f => {
+    const v = body[f];
+    if (v === undefined || v === null || v === '' ) return;
+    if (Array.isArray(v) && !v.length) return;
+    out[f] = v;
+    delete body[f];
+    found = true;
+  });
+  return found ? out : null;
+}
+
+/**
+ * بيطلب من المتصفح يثبّت التخزين. من غير ده أندرويد ممكن يمسح تخزين
+ * التطبيق تحت الضغط — ومعاه الشغل اللي لسه مترفعش.
+ */
+function askPersistentStorage() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persisted().then(already => {
+        if (!already) navigator.storage.persist();
+      }).catch(() => {});
+    }
+  } catch (e) {}
+}
+
+/** بيمسح صور عمليات خلصت أو اتشالت — بيتشغل وقت فراغ بعد الإقلاع */
+async function cleanOrphanBlobs() {
+  try {
+    const keys = await blobKeys();
+    if (!keys || !keys.length) return;
+    const alive = {};
+    S.queue.forEach(it => { if (it.payload && it.payload.op_id) alive[it.payload.op_id] = 1; });
+    (S.failed || []).forEach(it => { if (it.payload && it.payload.op_id) alive[it.payload.op_id] = 1; });
+    for (const k of keys) { if (!alive[k]) await blobDel(k); }
+  } catch (e) {}
+}
+
+/**
+ * سقف بيانات الطابور (من غير الصور — دي في IndexedDB).
+ *
+ * كان بيقارن str.length برقم بايتات، و str.length بيعدّ وحدات UTF-16
+ * يعني بايتين للحرف — فالسقف الحقيقي كان ضعف المكتوب، وعمره ما كان
+ * بيشتغل قبل ما مساحة المتصفح تخلص. دلوقتي بنقيس بالبايت فعلًا.
+ */
+const QUEUE_MAX_BYTES = 1500000;   // ~1.5 ميجا بيانات — آلاف العمليات
+function bytesOf(str) { return str.length * 2; }
 
 /** مفتاح فريد لكل عملية — بيمنع تسجيلها مرتين لو الرد ضاع واتبعتت تاني */
 function opId() {
   return (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
 }
 
-function qpush(action, payload) {
-  // المفتاح بيتولد وقت الحفظ في الطابور مش وقت الإرسال —
-  // عشان كل إعادة إرسال تفضل بنفس المفتاح فالسيرفر يعرف إنها نفس العملية
+/**
+ * بيحط عملية في الطابور. بترجّع false لو مااتحفظتش — واللي بينده
+ * **لازم** يتحقق من النتيجة ومايقولش للمندوب إنها اتحفظت.
+ *
+ * الصور بتتحفظ الأول في المخزن المنفصل، وبعدين البيانات. الترتيب ده
+ * مقصود: لو الصورة فشلت مبنسجلش العملية أصلًا، بدل ما نسجّل عملية
+ * بتشاور على صورة مش موجودة.
+ */
+async function qpush(action, payload) {
   const body = Object.assign({}, payload || {});
   if (!body.op_id) body.op_id = opId();
+
+  const blobs = takeBlobs(body);
+  if (blobs) {
+    const saved = await blobPut(body.op_id, blobs);
+    if (!saved) {
+      toast('📵 مش قادر أحفظ الصور على الجهاز — مااتحفظش', 'err');
+      return false;
+    }
+    body._blobs = true;
+  }
+
   S.queue.push({ action, payload: body, ts: Date.now() });
   const str = JSON.stringify(S.queue);
-  if (str.length > QUEUE_MAX_BYTES) {
+  if (bytesOf(str) > QUEUE_MAX_BYTES) {
     S.queue.pop();
+    if (blobs) await blobDel(body.op_id);
     toast('📵 المحفوظ محليًا وصل للحد الأقصى — لازم تتصل بالنت عشان يترفع الأول', 'err');
     return false;
   }
   if (!writeLS('crm_queue', str)) {
     S.queue.pop();
+    if (blobs) await blobDel(body.op_id);
     toast('📵 مساحة الجهاز خلصت — مااتحفظش. اتصل بالنت وحاول تاني', 'err');
     return false;
   }
@@ -362,6 +509,8 @@ let _flushing = false;
 
 /** أقصى عدد عمليات نبعتها في المرة — لازم يساوي أو يقل عن حد السيرفر */
 const FLUSH_BATCH = 10;
+/** أقصى محاولات للعملية الواحدة قبل ما تتنقل لقايمة "محتاجة تدخّل" */
+const MAX_TRIES = 6;
 
 /** اسم العملية بالعربي — بيظهر في قايمة اللي اترفض */
 function actionLabel(a) {
@@ -382,12 +531,55 @@ A.retryFailed = () => {
   qflush();
 };
 
-A.clearFailed = () => {
+A.clearFailed = async () => {
   if (!confirm('متأكد؟ العمليات دي هتتشال من القايمة ومش هتترفع.')) return;
+  for (const f of (S.failed || [])) {
+    if (f.payload && f.payload._blobs) await blobDel(f.payload.op_id);
+  }
   S.failed = [];
   save('crm_failed', S.failed);
   render();
 };
+
+/**
+ * إعادة المحاولة التلقائية.
+ *
+ * قبل كده الطابور كان بيترفع في 4 حالات بس (رجوع النت، إنهاء زيارة،
+ * فتح التطبيق، زرار التحديث) — ومن غير أي مؤقت. و navigator.onLine على
+ * أندرويد بيقول إن فيه شبكة وهي مش شغالة فعلًا، فمندوب خرج من نفق من
+ * غير ما يتطلق حدث "online" كان ممكن يفضل بالطابور كله لآخر اليوم.
+ *
+ * دلوقتي فيه مؤقت بتدرّج: كل ما محاولة تفشل، المدة تزيد — عشان
+ * مانستهلكش بطارية ولا شبكة على الفاضي.
+ */
+var _retryTimer = null, _retryStep = 0;
+var RETRY_STEPS = [15000, 30000, 60000, 120000, 300000];
+
+/**
+ * رفع مطلوب من حدث تلقائي (رجوع النت، رجوع المندوب للتطبيق).
+ *
+ * قبل كده الاتنين دول كانوا بينادوا qflush على طول **ويصفّروا التدرّج**.
+ * يعني مندوب عنده طابور واقف وبيفتح ويقفل التطبيق كان بيضرب السيرفر
+ * كل 15 ثانية بلا نهاية — وكل ضربة بتمسك القفل العام، فباقي المناديب
+ * بيقفوا. التدرّج كان موجود بس عمره ما وصل لآخره.
+ */
+var _lastFlushAt = 0;
+var MIN_FLUSH_GAP = 20000;
+function qflushAuto() {
+  if (Date.now() - _lastFlushAt < MIN_FLUSH_GAP) return Promise.resolve();
+  return qflush();
+}
+
+function scheduleFlush(reset) {
+  if (reset) _retryStep = 0;
+  clearTimeout(_retryTimer);
+  if (!S.queue.length) { _retryStep = 0; return; }
+  const wait = RETRY_STEPS[Math.min(_retryStep, RETRY_STEPS.length - 1)];
+  _retryTimer = setTimeout(() => {
+    _retryStep++;
+    qflush().then(() => scheduleFlush(false));
+  }, wait);
+}
 
 /**
  * رفع الطابور.
@@ -402,9 +594,19 @@ A.clearFailed = () => {
 async function qflush() {
   if (_flushing || !S.queue.length || !navigator.onLine) return;
   _flushing = true;
+  _lastFlushAt = Date.now();
   try {
     const batch = S.queue.slice(0, FLUSH_BATCH);
-    const res = await api('syncOffline', { queue: batch }, { quiet: true });
+    // الصور متخزنة لوحدها — بنرجّعها للحمولة وقت الإرسال بس
+    const toSend = [];
+    for (const it of batch) {
+      if (!it.payload || !it.payload._blobs) { toSend.push(it); continue; }
+      const blobs = await blobGet(it.payload.op_id);
+      const body = Object.assign({}, it.payload, blobs || {});
+      delete body._blobs;
+      toSend.push({ action: it.action, payload: body, ts: it.ts });
+    }
+    const res = await api('syncOffline', { queue: toSend }, { quiet: true });
     const byId = {};
     (res.results || []).forEach(r => { if (r.op_id) byId[r.op_id] = r; });
 
@@ -414,9 +616,24 @@ async function qflush() {
       const r = byId[(item.payload && item.payload.op_id) || ''];
       if (!r) { stillQueued.push(item); return; }       // السيرفر ماردش عليها — نعيد
       if (r.ok) return;                                  // وصلت — تتشال
-      if (r.retryable) { stillQueued.push(item); return; }
+      if (r.retryable) {
+        // عطل مؤقت — بس اللي بيفضل يفشل لازم يخرج من الطابور،
+        // غير كده بيعطّل كل اللي وراه للأبد
+        item.tries = (item.tries || 0) + 1;
+        if (item.tries < MAX_TRIES) { stillQueued.push(item); return; }
+        rejected.push(Object.assign({}, item, {
+          error: (r.error || 'فشل') + ' — بعد ' + item.tries + ' محاولات'
+        }));
+        return;
+      }
       rejected.push(Object.assign({}, item, { error: r.error || 'اترفضت' }));
     });
+
+    // صور العمليات اللي وصلت مالهاش لزمة بعد كده
+    for (const it of batch) {
+      const r = byId[(it.payload && it.payload.op_id) || ''];
+      if (r && r.ok && it.payload && it.payload._blobs) await blobDel(it.payload.op_id);
+    }
 
     // اللي اتبعت وهو في الطابور أثناء الإرسال لازم يفضل
     S.queue = stillQueued.concat(S.queue.slice(batch.length));
@@ -427,17 +644,20 @@ async function qflush() {
     }
 
     const done = batch.length - stillQueued.length - rejected.length;
-    if (done) toast('✅ اترفعت ' + done + ' عملية كانت متخزنة أوفلاين', 'ok');
+    if (done) { _retryStep = 0; toast('✅ اترفعت ' + done + ' عملية كانت متخزنة أوفلاين', 'ok'); }
     if (rejected.length) {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
     }
     render();
-    if (done) refresh(true);
     // فيه باقي؟ نكمّل
     if (S.queue.length && (done || stillQueued.length < batch.length)) {
       _flushing = false;
       return qflush();
     }
+    // التحديث بعد ما الطابور كله يخلص، مش مع كل دفعة: كل نداء تحديث
+    // بيقرا بيانات المندوب كاملة من السيرفر ويعيد بناء الشاشة، وطابور
+    // من 30 عملية كان بيعمل كده 3 مرات
+    if (done) refresh(true);
   } catch (e) {
     /* عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة */
   } finally {
@@ -507,7 +727,8 @@ async function doRefreshOnce(silent) {
     syncProducts();   // وكذلك كتالوج الأصناف
   } catch (e) {
     if (!silent && !e.offline) toast(e.msg || e.fatal || 'مشكلة في التحديث', 'err');
-    if (e.offline && !silent) toast('📴 مفيش نت — شغال بآخر بيانات محفوظة');
+    if (e.offline && !silent) toast(e.busy ? '⏳ السيرفر مشغول — شغال بآخر بيانات محفوظة'
+                                            : '📴 مفيش نت — شغال بآخر بيانات محفوظة');
   }
   S.loading = false;
   render();
@@ -638,9 +859,28 @@ A.mapConfirm = () => {
 };
 
 // ================== الدخول والخروج ==================
+/**
+ * الزيارة المفتوحة بقت بتعيش بعد الخروج (عشان متضيعش لو الجلسة انتهت
+ * والمندوب واقف قدام العميل) — فلازم نتأكد إنها بتاعة اللي داخل دلوقتي،
+ * مش بتاعة مندوب تاني استعمل نفس الموبايل.
+ */
+function ownLiveVisit() {
+  const lv = S.liveVisit;
+  if (!lv) return;
+  const me = S.user && String(S.user.id);
+  if (!me) return;
+  if (lv.rep_id && String(lv.rep_id) !== me) {
+    S.liveVisit = null;
+    localStorage.removeItem('crm_live_visit');
+  }
+}
+
 function doLogout() {
   stopTracking(true);
-  ['crm_token', 'crm_user', 'crm_creds', 'crm_device', 'crm_boot', 'crm_live_visit'].forEach(k => localStorage.removeItem(k));
+  // crm_live_visit مش في القايمة عن قصد: الزيارة اللي المندوب واقف
+  // فيها قدام العميل مش المفروض تضيع لمجرد إن الجلسة انتهت. بتفضل
+  // متخزنة وبترجع لصاحبها بس (الفحص في boot.js).
+  ['crm_token', 'crm_user', 'crm_creds', 'crm_device', 'crm_boot'].forEach(k => localStorage.removeItem(k));
   S.token = ''; S.user = null; S.data = null; S.liveVisit = null; S.device = '';
   render();
 }
@@ -669,7 +909,8 @@ A.login = async () => {
     if (S.user.role === 'rep') await checkGpsPermission();
     ensureTracking(true);
   } catch (e) {
-    toast(e.msg || e.fatal || (e.offline ? 'مفيش نت — جرب تاني' : 'حصل خطأ'), 'err');
+    toast(e.msg || e.fatal || (e.busy ? 'السيرفر مشغول — جرب تاني بعد شوية'
+                                      : e.offline ? 'مفيش نت — جرب تاني' : 'حصل خطأ'), 'err');
     btn.disabled = false; btn.textContent = 'دخول';
   }
 };
@@ -1200,7 +1441,7 @@ A.saveLocAndCheckin = async (custId, saveLoc) => {
     try { await api('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
     catch (e) {
       if (!e.offline) return;
-      if (!qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' })) return;
+      if (!await qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' })) return;
     }
   }
   await doCheckin(c, pos, added);
@@ -1213,7 +1454,7 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
     try { await api('setCustomerLocation', { customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
     catch (e) {
       if (!e.offline) return toast(e.msg || 'خطأ', 'err');
-      if (qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' })) {
+      if (await qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: ll.lat, lng: ll.lng, source: 'manual' })) {
         toast('اتحفظ محليًا وهيترفع لما النت يرجع');
       }
     }
@@ -1244,6 +1485,7 @@ async function doCheckin(c, pos, locationAdded) {
       toast('📴 مفيش نت — الزيارة اتسجلت محليًا وهتترفع تلقائي', 'ok');
     } else { toast(e.msg || 'خطأ', 'err'); return; }
   }
+  if (S.liveVisit && S.user) S.liveVisit.rep_id = S.user.id;
   save('crm_live_visit', S.liveVisit);
   S.tab = 'today';
   render();
@@ -1341,18 +1583,26 @@ A.checkoutSave = async () => {
     await api('checkout', Object.assign({ visit_id: lv.visit_id, op_id: opKey }, form));
     toast('✅ الزيارة اتسجلت بنجاح', 'ok');
     // رفع الصور بعد ما الزيارة اتسجلت
+    let queuedPhotos = 0;
     for (let i = 0; i < photos.length; i++) {
       try {
         toast('⏳ برفع صورة ' + (i + 1) + ' من ' + photos.length);
         await uploadAttachment('visit', lv.visit_id, 'photo', photos[i]);
-      } catch (e) { toast('صورة ' + (i + 1) + ' مترفعتش: ' + (e.msg || ''), 'err'); }
+      } catch (err) {
+        // الصورة اللي مترفعتش تدخل الطابور — قبل كده كانت بتضيع خالص
+        if (await qpush('uploadAttachment', {
+          op_id: opId(), kind: 'visit', id: lv.visit_id, type: 'photo', data: photos[i]
+        })) queuedPhotos++;
+        else toast('صورة ' + (i + 1) + ' مترفعتش: ' + (err.msg || ''), 'err');
+      }
     }
-    if (photos.length) toast('📷 الصور اترفعت', 'ok');
+    if (photos.length > queuedPhotos) toast('📷 الصور اترفعت', 'ok');
+    if (queuedPhotos) toast('📴 ' + queuedPhotos + ' صورة هترفع لما النت يرجع', 'ok');
   } catch (e) {
     if (e.offline) {
       const [h1, m1] = lv.checkin_time.split(':').map(Number);
       const [h2, m2] = outTime.split(':').map(Number);
-      const ok = qpush('quickVisit', Object.assign({
+      const ok = await qpush('quickVisit', Object.assign({
         op_id: opKey,
         customer_id: lv.customer_id, date: new Date().toISOString().slice(0, 10),
         checkin_time: lv.checkin_time, checkout_time: outTime,
@@ -1362,7 +1612,19 @@ A.checkoutSave = async () => {
       // لو الحفظ المحلي فشل، الزيارة لازم تفضل مفتوحة — مسحها هنا كان
       // بيضيّع تقرير المندوب وهو شايف رسالة نجاح خضرا
       if (!ok) { qflush(); return; }
-      toast('📴 التقرير اتحفظ محليًا وهيترفع تلقائي', 'ok');
+      // الصور بتتحفظ كعمليات منفصلة بترتيبها بعد الزيارة، وبتشاور عليها
+      // بمفتاح عمليتها لأن رقم الزيارة لسه مش موجود
+      let savedPhotos = 0;
+      for (let i = 0; i < photos.length; i++) {
+        if (await qpush('uploadAttachment', {
+          op_id: opId(), kind: 'visit', visit_op_id: opKey, type: 'photo', data: photos[i]
+        })) savedPhotos++;
+      }
+      toast('📴 التقرير' + (savedPhotos ? ' و' + savedPhotos + ' صورة' : '') +
+            ' اتحفظوا محليًا وهيترفعوا تلقائي', 'ok');
+      if (savedPhotos < photos.length) {
+        toast('⚠️ ' + (photos.length - savedPhotos) + ' صورة مااتحفظتش — مساحة الجهاز', 'err');
+      }
     } else { toast(e.msg || 'خطأ', 'err'); return; }
   }
   if (c && form.status === 'تمت') c.last_visit_date = new Date().toISOString().slice(0, 10);
@@ -1420,12 +1682,24 @@ A.fuClose = async (id) => {
   const note = prompt('ملاحظة على الإقفال (اختياري):', '');
   if (note === null) return;
   try { const r = await api('closeFollowup', { id: id, note: note }); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); refresh(true); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  catch (e) {
+    if (e.offline) {
+      if (await qpush('closeFollowup', Object.assign({ op_id: opId() }, { id: id, note: note }))) toast('📴 اتحفظت محليًا', 'ok');
+      return;
+    }
+    toast(e.msg || 'خطأ', 'err');
+  }
 };
 A.fuCancel = async (id) => {
   if (!confirm('إلغاء المتابعة دي؟')) return;
   try { const r = await api('closeFollowup', { id: id, cancel: true }); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  catch (e) {
+    if (e.offline) {
+      if (await qpush('closeFollowup', Object.assign({ op_id: opId() }, { id: id, cancel: true }))) toast('📴 اتحفظت محليًا', 'ok');
+      return;
+    }
+    toast(e.msg || 'خطأ', 'err');
+  }
 };
 A.fuPostpone = (id) => {
   const d = new Date(); d.setDate(d.getDate() + 3);
@@ -1440,10 +1714,16 @@ A.fuPostpone = (id) => {
     </div>`);
 };
 A.fuPostponeSave = async (id) => {
-  const payload = { id: id, postpone: true, due_date: $('#fu-date').value, note: $('#fu-note').value.trim() };
+  const payload = { op_id: opId(), id: id, postpone: true, due_date: $('#fu-date').value, note: $('#fu-note').value.trim() };
   closeModal();
   try { const r = await api('closeFollowup', payload); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  catch (e) {
+    if (e.offline) {
+      if (await qpush('closeFollowup', Object.assign({ op_id: opId() }, payload))) toast('📴 اتحفظت محليًا', 'ok');
+      return;
+    }
+    toast(e.msg || 'خطأ', 'err');
+  }
 };
 A.fuAdd = (custId) => {
   const c = custById(custId);
@@ -1461,14 +1741,20 @@ A.fuAdd = (custId) => {
     </div>`);
 };
 A.fuAddSave = async (custId) => {
-  const payload = {
+  const payload = { op_id: opId(),
     customer_id: custId, type: $('#fu-type').value, due_date: $('#fu-due').value,
     amount: normDigits($('#fu-amount').value), note: $('#fu-note2').value.trim()
   };
   if (!payload.due_date) return toast('حدد التاريخ', 'err');
   closeModal();
   try { const r = await api('saveFollowup', payload); toast(r.message, 'ok'); S.fu = null; A.loadFollowups(); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  catch (e) {
+    if (e.offline) {
+      if (await qpush('saveFollowup', payload)) toast('📴 المتابعة اتحفظت محليًا', 'ok');
+      return;
+    }
+    toast(e.msg || 'خطأ', 'err');
+  }
 };
 
 // ----- سجل المندوب: طلباته وتحصيلاته -----
@@ -1655,7 +1941,7 @@ A.quickCallSave = async (custId) => {
   closeModal();
   try { await api('quickVisit', payload); toast('✅ اتسجلت', 'ok'); refresh(true); }
   catch (e) {
-    if (e.offline) { if (qpush('quickVisit', payload)) toast('📴 اتحفظت محليًا', 'ok'); }
+    if (e.offline) { if (await qpush('quickVisit', payload)) toast('📴 اتحفظت محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -1725,7 +2011,7 @@ A.leadSave = async () => {
   closeModal();
   try { await api('addLead', payload); toast('✅ الليد اتضاف', 'ok'); refresh(true); }
   catch (e) {
-    if (e.offline) { if (qpush('addLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
+    if (e.offline) { if (await qpush('addLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -1750,7 +2036,7 @@ A.leadStageSave = async (id) => {
     toast(payload.stage === 'اتحول لعميل' ? '🎉 مبروك — الليد بقى عميل!' : '✅ اتحدث', 'ok');
     refresh(true);
   } catch (e) {
-    if (e.offline) { if (qpush('updateLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
+    if (e.offline) { if (await qpush('updateLead', payload)) toast('📴 اتحفظ محليًا', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -2332,7 +2618,7 @@ A.orderSave = async (custId) => {
   closeModal();
   try { const r = await api('saveOrder', payload); toast(r.message, 'ok'); }
   catch (e) {
-    if (e.offline) { if (qpush('saveOrder', payload)) toast('📴 الطلب اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
+    if (e.offline) { if (await qpush('saveOrder', payload)) toast('📴 الطلب اتحفظ محليًا وهيترفع لما النت يرجع', 'ok'); }
     else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -2437,7 +2723,7 @@ A.collectSave = async (custId) => {
     refresh(true);
   } catch (e) {
     if (e.offline) {
-      if (qpush('saveCollection', payload)) toast('📴 السند اتحفظ محليًا وهيترفع لما النت يرجع', 'ok');
+      if (await qpush('saveCollection', payload)) toast('📴 السند اتحفظ محليًا وهيترفع لما النت يرجع', 'ok');
     } else toast(e.msg || 'خطأ', 'err');
   }
 };
@@ -2534,7 +2820,7 @@ A.myExpenses = async () => {
 };
 
 A.expenseSave = async () => {
-  const payload = {
+  const payload = { op_id: opId(),
     voucher: normDigits($('#exp-voucher').value).trim(),
     category: $('#exp-cat').value,
     amount: normDigits($('#exp-amount').value),
@@ -2548,7 +2834,14 @@ A.expenseSave = async () => {
   if (Number(payload.amount) > A._cash.cash.balance) return toast('المبلغ أكبر من العهدة اللي معاك', 'err');
   closeModal();
   try { const r = await api('saveExpense', payload); toast(r.message, 'ok'); A.myCash(); }
-  catch (e) { toast(e.msg || 'خطأ', 'err'); }
+  catch (e) {
+    // المصروف بيأثر على عهدة المندوب — ضياعه بيبوّظ حسابه، فلازم يتحفظ
+    if (e.offline) {
+      if (await qpush('saveExpense', payload)) toast('📴 المصروف اتحفظ محليًا وهيترفع لما النت يرجع', 'ok');
+      return;
+    }
+    toast(e.msg || 'خطأ', 'err');
+  }
 };
 
 // ==================== [ tracking.js ] ====================
@@ -2714,7 +3007,13 @@ async function flushTrack() {
 /* CRM روافد — نقطة التشغيل (لازم يتحمّل آخر واحد) */
 
 // ================== التشغيل ==================
-window.addEventListener('online', () => { document.body.classList.remove('is-offline'); qflush(); flushTrack(); });
+window.addEventListener('online', () => {
+  document.body.classList.remove('is-offline');
+  // مش scheduleFlush(true): التدرّج بيترجّع لأوله لما عملية تنجح فعلًا
+  // (جوه qflush) — مش كل ما أندرويد يقول إن فيه شبكة، وهو بيقولها كتير
+  qflushAuto().then(() => scheduleFlush(false));
+  flushTrack();
+});
 window.addEventListener('offline', () => document.body.classList.add('is-offline'));
 // لما التطبيق يرجع للواجهة تاني — نرجّع قفل الشاشة ونرفع اللي اتجمع
 document.addEventListener('visibilitychange', () => {
@@ -2722,6 +3021,8 @@ document.addEventListener('visibilitychange', () => {
   if (gpsBlocked()) { checkGpsPermission(); return; }
   ensureTracking(true);   // نقطة جديدة كل ما يرجع للتطبيق — بيها بيتوصل المسار
   flushTrack();
+  // شغل المندوب أهم من نقط التتبع — قبل كده ده كان بيرفع النقط بس
+  qflushAuto().then(() => scheduleFlush(false));
 });
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -2736,7 +3037,10 @@ if ('serviceWorker' in navigator) {
 render();
 window.__crmStarted = true;   // بيقول لشبكة الأمان في index.html إن التطبيق فتح فعلًا
 if (S.token) {
-  qflush();
+  askPersistentStorage();          // عشان أندرويد مايمسحش الشغل تحت الضغط
+  qflush().then(() => scheduleFlush(true));
+  setTimeout(cleanOrphanBlobs, 5000);
+  ownLiveVisit();                  // زيارة مندوب تاني على نفس الموبايل متظهرش
   refresh(true).then(() => {
     if (S.user && S.user.role === 'rep') checkGpsPermission();
     ensureTracking(true);
