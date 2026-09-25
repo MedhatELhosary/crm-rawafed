@@ -407,9 +407,16 @@ async function api(action, payload, opts) {
       const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
       try {
+        const body = Object.assign({ action, token: S.token }, payload || {});
+        // العمليات دي بيرجع معاها التحديث في نفس الرد — بنبعت بصماتنا
+        // فالسيرفر مايبعتش غير اللي اتغير
+        if (WANT_DATA[action]) {
+          body.withData = 1;
+          body.hashes = usableHashes(S.data);
+        }
         resp = await fetch(API_URL, {
           method: 'POST',
-          body: JSON.stringify(Object.assign({ action, token: S.token }, payload || {})),
+          body: JSON.stringify(body),
           signal: ctrl ? ctrl.signal : undefined
         });
         text = await resp.text();
@@ -444,6 +451,8 @@ async function api(action, payload, opts) {
       throw { offline: true, server: true, status: resp.status, msg: m };
     }
     if (res && res.ms) LAST_SERVER_MS = res.ms;
+    // بيانات محدّثة جت مع الرد — نطبّقها ونستغنى عن نداء التحديث
+    if (res && res.ok && res.boot) { applyBoot(res.boot); render(); }
     // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
     //
     // مهم جدًا: الطرد بيحصل **بس** لما التجديد نفسه يترفض. قبل كده
@@ -842,12 +851,64 @@ function usableHashes(data) {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * العمليات اللي بنطلب معاها البيانات المحدّثة في نفس الرد.
+ *
+ * كل نداء بياخد ~1.9 ثانية ثابتة من Apps Script (قسناها). وكل واحدة
+ * من دي كانت بعدها `refresh` — يعني نداء تاني وانتظار تاني على الفاضي.
+ */
+var WANT_DATA = {
+  checkin: 1, checkout: 1, quickVisit: 1, saveOrder: 1, saveCollection: 1,
+  addLead: 1, updateLead: 1, setCustomerLocation: 1, saveExpense: 1,
+  saveFollowup: 1, closeFollowup: 1, syncOffline: 1
+};
+
+/** آخر لحظة وصلت فيها بيانات محدّثة — بيها بنلغي التحديث الزيادة */
+var _dataAt = 0;
+
+/**
+ * بيطبّق حمولة الإقلاع — سواء جت من نداء تحديث أو ملزوقة في رد عملية.
+ *
+ * نفس المنطق بالحرف في الحالتين، فلازم يبقى في مكان واحد: دمج الأقسام
+ * اللي السيرفر قال عنها "مفيش تغيير"، وحزام أمان للبصمة الضايعة.
+ */
+function applyBoot(res) {
+  if (!res || !res.ok) return false;
+  // المستخدم خرج وإحنا مستنيين الرد — نسيب البيانات في حالها، غير كده
+  // بنخزّن نسخة ناقصة على الجهاز
+  if (!S.token || !S.user) return false;
+
+  if (res.unchanged && res.unchanged.length && S.data) {
+    res.unchanged.forEach(k => { if (S.data[k] !== undefined) res[k] = S.data[k]; });
+  }
+  // أي قسم السيرفر قال عنه "مفيش تغيير" ومالقيناهوش عندنا: نشيل بصمته
+  // عشان التحديث الجاي يجيبه كامل
+  (res.unchanged || []).forEach(k => {
+    if (res[k] === undefined && res.hashes) delete res.hashes[k];
+  });
+  S.data = res;
+  save('crm_boot', res);
+  _dataAt = Date.now();
+  const st = res.settings || res.allSettings || {};
+  if (st.CURRENCY) writeLS('crm_currency', st.CURRENCY);
+  if (st.COMPANY_NAME) writeLS('crm_company', st.COMPANY_NAME);
+  syncLogo();       // اللوجو بيتحمّل مرة واحدة بس لو اتغير
+  syncProducts();   // وكذلك كتالوج الأصناف
+  return true;
+}
+
 // تحديث واحد في المرة — التطبيق بينده refresh من عشرات الأماكن، ومن غير
 // الحارس ده ممكن ردين يتطبقوا فوق بعض
 let _refreshing = null;
 
+/** بعد قد إيه نعتبر البيانات قديمة ونسأل السيرفر تاني */
+var DATA_FRESH_MS = 3000;
+
 async function refresh(silent) {
   if (!S.token) return;
+  // البيانات وصلت مع رد العملية نفسها، فالنداء ده بيكلّف ~1.9 ثانية
+  // ومبيجيبش جديد. التحديث اللي المستخدم طلبه بإيده (مش صامت) بيعدي.
+  if (silent && Date.now() - _dataAt < DATA_FRESH_MS) return;
   if (_refreshing) return _refreshing;
   _refreshing = doRefreshOnce(silent).finally(() => { _refreshing = null; });
   return _refreshing;
@@ -859,27 +920,7 @@ async function doRefreshOnce(silent) {
     const action = S.user && S.user.role === 'admin' ? 'adminData' : 'bootstrap';
     // التحديث الجزئي: بنبعت بصمات اللي عندنا والسيرفر بيبعت المتغير بس
     const res = await api(action, { hashes: usableHashes(S.data) });
-
-    // المستخدم خرج أو الجلسة انتهت وإحنا مستنيين الرد — نسيب البيانات
-    // في حالها. لو كتبنا الرد دلوقتي كنا هنخزّن نسخة ناقصة على الجهاز.
-    if (!S.token || !S.user) return;
-
-    if (res.unchanged && res.unchanged.length && S.data) {
-      res.unchanged.forEach(k => { if (S.data[k] !== undefined) res[k] = S.data[k]; });
-    }
-    // حزام أمان: أي قسم السيرفر قال عنه "مفيش تغيير" ومالقيناهوش عندنا،
-    // بنشيل بصمته عشان التحديث الجاي يجيبه كامل
-    (res.unchanged || []).forEach(k => {
-      if (res[k] === undefined && res.hashes) delete res.hashes[k];
-    });
-    S.data = res;
-    save('crm_boot', res);
-    // تخزين هوية الشركة محليًا عشان تظهر في شاشة الدخول قبل تحميل البيانات
-    const st = res.settings || res.allSettings || {};
-    if (st.CURRENCY) writeLS('crm_currency', st.CURRENCY);
-    if (st.COMPANY_NAME) writeLS('crm_company', st.COMPANY_NAME);
-    syncLogo();       // اللوجو بيتحمّل مرة واحدة بس لو اتغير
-    syncProducts();   // وكذلك كتالوج الأصناف
+    applyBoot(res);   // نفس المنطق اللي بيتطبّق على البيانات الملزوقة
   } catch (e) {
     if (!silent) {
       // الرسالة الحقيقية أهم من أي وصف عام — لو السيرفر قال سبب، نقوله
@@ -1121,6 +1162,10 @@ A.login = async () => {
   if (!username || !pin) return toast('اكتب اسم المستخدم والرقم السري', 'err');
   const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'ثواني...';
   try {
+    // بيانات أي مستخدم سابق لازم تروح قبل الدخول: من غير كده بصماته
+    // بتتبعت والسيرفر يقول "مفيش تغيير" — فالداخل الجديد يشوف عملاء
+    // مندوب تاني
+    S.data = null; _dataAt = 0;
     const res = await api('login', { username, pin, device: deviceLabel() }, { noRetry: true });
     S.token = res.token; S.user = res.user; S.device = res.device || '';
     writeLS('crm_token', S.token);
@@ -1128,8 +1173,9 @@ A.login = async () => {
     localStorage.removeItem('crm_creds');   // مبقيناش نخزّن الرقم السري على الجهاز
     save('crm_user', S.user);
     S.tab = 'today'; S.adminTab = 'dash';
-    render();
-    await refresh();
+    // البيانات جاية مع رد الدخول للمندوب — الأدمن لسه محتاج adminData
+    if (!(res.boot && applyBoot(res.boot))) { render(); await refresh(); }
+    else render();
     if (S.user.role === 'rep') await checkGpsPermission();
     ensureTracking(true);
   } catch (e) {
