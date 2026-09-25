@@ -338,8 +338,50 @@ function noteErr(kind, detail, ms) {
   try { localStorage.setItem('crm_last_err', JSON.stringify(LAST_ERR)); } catch (e) {}
 }
 
+/**
+ * أوامر إعادة المحاولة عليها آمنة لأنها مبتغيّرش حاجة (قراءة بس).
+ * نفس قايمة readOnly في الراوتر على السيرفر.
+ */
+var READ_ACTIONS = {
+  bootstrap: 1, adminData: 1, getSyncStatus: 1, getStatement: 1, diagnose: 1,
+  overdueBreakdown: 1, dailyReport: 1, exportTemplate: 1, getLogo: 1,
+  backupList: 1, healthCheck: 1, salesData: 1, orderItems: 1, myCash: 1,
+  qoyodProbe: 1, getProducts: 1, leaderboard: 1, dataSizes: 1,
+  followups: 1, followupsAdmin: 1, getAttachment: 1, bankUnmatched: 1,
+  expenseReport: 1, expensesToPush: 1, statementAudit: 1, visitsReport: 1,
+  visitIssues: 1, regionsReport: 1, customersReport: 1, invoiceDetailProbe: 1,
+  scorecard: 1, login: 1, renew: 1
+};
+
+/**
+ * هل ينفع نعيد النداء ده لو النقل فشل؟
+ *
+ * القياس بيقول إن Apps Script بيفشل من غير سبب واحد من كل تلاتة تقريبًا،
+ * والسيرفر بينفّذ في 20 جزء من الثانية — يعني الفشل في النقل مش في الكود.
+ * وإعادة المحاولة بتحوّل الفشل ده لنجاح.
+ *
+ * بس مينفعش نعيد على عماها: التحويل بيتم **بعد** ما الكود يتنفّذ، فالفشل
+ * ميعنيش إن العملية متنفذتش. فبنعيد بس لو:
+ *   • الأمر قراءة (مبيغيّرش حاجة)، أو
+ *   • الحمولة فيها مفتاح عملية — وساعتها opGuard على السيرفر بيمنع التكرار
+ * أي أمر تاني (زي بعت طلب لقيود أو حفظ مستخدم) بيفضل من غير إعادة.
+ */
+function canRetry(action, payload) {
+  if (READ_ACTIONS[action]) return true;
+  return !!(payload && payload.op_id);
+}
+
 /** مهلة النداء — بعدها بنعتبره فشل ونحط العملية في الطابور */
 var API_TIMEOUT = 40000;
+/**
+ * إعادة المحاولة على فشل النقل.
+ *
+ * القياس على السيرفر الحقيقي: الكود بينفّذ في 16–26 جزء من الثانية،
+ * والرحلة الكاملة 1.7 لـ 11.5 ثانية، وواحدة من كل تلاتة بتفشل أو ترجّع
+ * 404 من طبقة التحويل. محاولتين إضافيتين بينزّلوا الفشل من 33% لأقل من 4%.
+ */
+var MAX_NET_TRIES = 2;
+var NET_BACKOFF = [900, 2500];
 var SLOW_ACTIONS = {
   backupNow: 1, archiveNow: 1, syncProducts: 1, runQoyodSync: 1, pushPending: 1,
   bulkImport: 1, finishImport: 1, importQoyodCustomers: 1, recomputeInvoiceDetails: 1,
@@ -376,13 +418,25 @@ async function api(action, payload, opts) {
       // ده الفشل الحقيقي الوحيد اللي يستاهل اسم "مفيش نت":
       // المتصفح مقدرش يوصل للسيرفر خالص، أو المهلة خلصت
       const cut = e && e.name === 'AbortError';
-      noteErr(cut ? 'مهلة' : 'شبكة', action + ' — ' + (cut ? 'عدّى المهلة' : (e && e.message) || ''), Date.now() - t0);
+      const tries = (opts && opts.netTry) || 0;
+      if (tries < MAX_NET_TRIES && canRetry(action, payload)) {
+        await new Promise(r => setTimeout(r, NET_BACKOFF[tries]));
+        return await api(action, payload, Object.assign({}, opts || {}, { netTry: tries + 1, quiet: true }));
+      }
+      noteErr(cut ? 'مهلة' : 'شبكة', action + ' — ' + (cut ? 'عدّى المهلة' : (e && e.message) || '') +
+              (tries ? ' (بعد ' + (tries + 1) + ' محاولات)' : ''), Date.now() - t0);
       throw { offline: true, timeout: cut };
     }
     // وصلنا للسيرفر فعلًا — أي مشكلة من هنا مش مشكلة نت
     try { res = JSON.parse(text); }
     catch (e) {
-      const m = serverErrText(resp.status, text);
+      // 404 من طبقة التحويل بتاعة جوجل بيحصل عشوائيًا والنداء نفسه سليم
+      const tries = (opts && opts.netTry) || 0;
+      if (tries < MAX_NET_TRIES && canRetry(action, payload)) {
+        await new Promise(r => setTimeout(r, NET_BACKOFF[tries]));
+        return await api(action, payload, Object.assign({}, opts || {}, { netTry: tries + 1, quiet: true }));
+      }
+      const m = serverErrText(resp.status, text) + (tries ? ' — بعد ' + (tries + 1) + ' محاولات' : '');
       noteErr('السيرفر', action + ' — ' + m, Date.now() - t0);
       // offline كمان عشان العملية تدخل الطابور بدل ما تضيع: إحنا مش
       // عارفين لو السيرفر نفّذها ولا لأ، ومفتاح العملية هو اللي بيمنع

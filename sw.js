@@ -1,5 +1,5 @@
 ﻿// Service Worker â€” ط¨ظٹط®ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ظٹظپطھط­ ط¨ط¯ظˆظ† ظ†طھطŒ ظˆط¨ظٹط§ط®ط¯ ط§ظ„طھط­ط¯ظٹط«ط§طھ ظپظˆط±ظ‹ط§ ظ„ظ…ط§ ظٹظƒظˆظ† ظپظٹظ‡ ظ†طھ
-const CACHE = 'crm-rawafed-v62';
+const CACHE = 'crm-rawafed-v63';
 
 // ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡ â€” ط¯ظٹ ط¨طھطھط­ط¯ط« ظƒظ„ ط´ظˆظٹط©
 const SHELL = [
@@ -96,7 +96,13 @@ function fromNetwork(request, timeoutMs) {
 function cacheFirst(request, timeoutMs) {
   return caches.match(request).then(cached => {
     if (cached) { fromNetwork(request, timeoutMs); return cached; }
-    return fromNetwork(request, timeoutMs).then(r => r || cached);
+    return fromNetwork(request, timeoutMs).then(r => {
+      if (r) return r;
+      // مفيش نسخة مخزّنة والمهلة خلصت — **مينفعش** نرجّع null هنا:
+      // respondWith بـ null بيبوّظ الطلب خالص، فالمتصفح يقول "فشل" على
+      // حاجة كانت شغالة بس بطيئة. بنكمّل من غير مهلة.
+      return fetch(request).catch(() => Response.error());
+    });
   });
 }
 
@@ -105,6 +111,18 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;                      // ط·ظ„ط¨ط§طھ ط§ظ„ظ€ API ظ…طھطھظƒط§ط´ط´
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
+
+  // ── نداءات السيرفر متعدّيش من هنا خالص ──
+  //
+  // الكود القديم كان آخره `e.respondWith(cacheFirst(req, 8000))` بلا أي
+  // شرط، فكان بيلف على **كل** طلب GET — ومن ضمنهم نداءات Apps Script.
+  // ودي عملت مشكلتين:
+  //   (١) ردود السيرفر كانت بتتخزن في الكاش، فممكن التطبيق يقرا رد قديم
+  //   (٢) أي نداء عدّى 8 ثواني كان بيتحوّل لفشل نهائي (respondWith بـ null)
+  //       بدل ما يستنى — والنداء ده كان ناجح أصلًا، بس بطيء
+  // إحنا اتأكدنا من ده بالقياس: لقينا 5 ردود سيرفر متخزنة في كاش الـ SW،
+  // وفشل بيحصل عند 8013 و8016 جزء من الثانية بالظبط.
+  if (!sameOrigin && url.hostname !== 'unpkg.com') return;
 
   const isShell = sameOrigin && (
     req.mode === 'navigate' ||
