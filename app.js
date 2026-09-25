@@ -329,6 +329,24 @@ function serverErrText(status, body) {
 
 /** آخر وقت تنفيذ على السيرفر (بالملي ثانية) — بيقوله السيرفر نفسه */
 var LAST_SERVER_MS = 0;
+/**
+ * وقت السيرفر لكل أمر + تفصيلة خطواته.
+ *
+ * "8 ثواني على السيرفر" لوحدها مبتقولش نعمل إيه. السيرفر بقى بيرجّع
+ * وقت كل قراءة على حدة، وده بيتعرض في شاشة الفحص — فالمرة الجاية
+ * نعرف السطر المسؤول مش نخمّن.
+ */
+var SERVER_TIMES = {}, SERVER_PARTS = {};
+function noteServerTime(action, res) {
+  if (!res || !res.ms) return;
+  LAST_SERVER_MS = res.ms;
+  SERVER_TIMES[action] = res.ms;
+  const parts = res.t || (res.boot && res.boot.t);
+  if (parts) SERVER_PARTS[action] = parts;
+  try {
+    localStorage.setItem('crm_srv_times', JSON.stringify({ t: SERVER_TIMES, p: SERVER_PARTS }));
+  } catch (e) {}
+}
 
 /** آخر خطأ سيرفر — بيتعرض في شاشة الفحص عشان نعرف المشكلة بالظبط */
 var LAST_ERR = null;
@@ -450,7 +468,7 @@ async function api(action, payload, opts) {
       // التكرار لما تتعاد
       throw { offline: true, server: true, status: resp.status, msg: m };
     }
-    if (res && res.ms) LAST_SERVER_MS = res.ms;
+    noteServerTime(action, res);
     // بيانات محدّثة جت مع الرد — نطبّقها ونستغنى عن نداء التحديث
     if (res && res.ok && res.boot) { applyBoot(res.boot); render(); }
     // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
@@ -1094,6 +1112,23 @@ A.ping = async () => {
     line = (e && e.name === 'AbortError')
       ? '❌ السيرفر مردش خالص خلال 30 ثانية'
       : '❌ مقدرتش أوصل للسيرفر بعد ' + ms + ' جزء من الثانية';
+  }
+  // أبطأ الأوامر وتفصيلة خطواتها — ده اللي بيحدد نصلّح إيه
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('crm_srv_times') || 'null'); } catch (e) {}
+  const times = Object.assign({}, (saved && saved.t) || {}, SERVER_TIMES);
+  const parts = Object.assign({}, (saved && saved.p) || {}, SERVER_PARTS);
+  const slow = Object.keys(times).sort((a, b) => times[b] - times[a]).slice(0, 5);
+  if (slow.length) {
+    line += '\n\nأبطأ الأوامر على السيرفر:';
+    slow.forEach(a => {
+      line += '\n  ' + a + ': ' + times[a] + ' جزء من الثانية';
+      const p = parts[a];
+      if (p) {
+        const steps = Object.keys(p).filter(k => p[k] >= 100).sort((x, y) => p[y] - p[x]);
+        if (steps.length) line += '\n     ' + steps.map(k => k + ' ' + p[k]).join(' · ');
+      }
+    });
   }
   if (LAST_SERVER_MS) line += '\nآخر عملية اتنفذت على السيرفر في: ' + LAST_SERVER_MS + ' جزء من الثانية';
   // السيرفر بيقول لينك الديبلويمنت الشغال بتاعه. لو مختلف عن اللي
