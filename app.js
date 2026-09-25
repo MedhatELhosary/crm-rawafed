@@ -470,7 +470,7 @@ async function api(action, payload, opts) {
     }
     noteServerTime(action, res);
     // بيانات محدّثة جت مع الرد — نطبّقها ونستغنى عن نداء التحديث
-    if (res && res.ok && res.boot) { applyBoot(res.boot); render(); }
+    if (res && res.ok && res.boot) { applyBoot(res.boot, true); render(); }
     // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
     //
     // مهم جدًا: الطرد بيحصل **بس** لما التجديد نفسه يترفض. قبل كده
@@ -890,7 +890,7 @@ var _dataAt = 0;
  * نفس المنطق بالحرف في الحالتين، فلازم يبقى في مكان واحد: دمج الأقسام
  * اللي السيرفر قال عنها "مفيش تغيير"، وحزام أمان للبصمة الضايعة.
  */
-function applyBoot(res) {
+function applyBoot(res, fromWrite) {
   if (!res || !res.ok) return false;
   // المستخدم خرج وإحنا مستنيين الرد — نسيب البيانات في حالها، غير كده
   // بنخزّن نسخة ناقصة على الجهاز
@@ -906,7 +906,10 @@ function applyBoot(res) {
   });
   S.data = res;
   save('crm_boot', res);
-  _dataAt = Date.now();
+  // بنعلّم "البيانات وصلت" **بس** لو جت ملزوقة في رد عملية كتابة.
+  // لو حطّيناها هنا في كل الحالات، تحديث عادي بيخلي التحديث اللي بعد
+  // الحفظ يتلغى — فالأدمن يحفظ حاجة ومايشوفهاش.
+  if (fromWrite) _dataAt = Date.now();
   const st = res.settings || res.allSettings || {};
   if (st.CURRENCY) writeLS('crm_currency', st.CURRENCY);
   if (st.COMPANY_NAME) writeLS('crm_company', st.COMPANY_NAME);
@@ -1209,7 +1212,7 @@ A.login = async () => {
     save('crm_user', S.user);
     S.tab = 'today'; S.adminTab = 'dash';
     // البيانات جاية مع رد الدخول للمندوب — الأدمن لسه محتاج adminData
-    if (!(res.boot && applyBoot(res.boot))) { render(); await refresh(); }
+    if (!(res.boot && applyBoot(res.boot, true))) { render(); await refresh(); }
     else render();
     if (S.user.role === 'rep') await checkGpsPermission();
     ensureTracking(true);
