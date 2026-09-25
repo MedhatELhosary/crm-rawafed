@@ -1001,6 +1001,18 @@ A.ping = async () => {
       : '❌ مقدرتش أوصل للسيرفر بعد ' + ms + ' جزء من الثانية';
   }
   if (LAST_SERVER_MS) line += '\nآخر عملية اتنفذت على السيرفر في: ' + LAST_SERVER_MS + ' جزء من الثانية';
+  // السيرفر بيقول لينك الديبلويمنت الشغال بتاعه. لو مختلف عن اللي
+  // التطبيق بيكلّمه، دي المشكلة كلها — والمقارنة دي كانت هتوفّر أيام
+  const live = (S.data && S.data.liveUrl) || '';
+  const bare = u => String(u || '').replace(/\/(dev|exec)$/, '');
+  if (live && bare(live) !== bare(API_URL)) {
+    line += '\n\n🚨 التطبيق بيكلّم لينك غير المنشور!' +
+            '\nاللي في التطبيق: ' + API_URL +
+            '\nالمنشور فعلًا:  ' + live +
+            '\nالحل: غيّر اللينك في config.js على GitHub للمنشور.';
+  } else if (live) {
+    line += '\nاللينك مطابق للمنشور ✅';
+  }
   let le = LAST_ERR;
   if (!le) { try { le = JSON.parse(localStorage.getItem('crm_last_err') || 'null'); } catch (e) {} }
   if (le) line += '\n\nآخر خطأ (' + le.at + ')\nالنوع: ' + le.kind + '\n' + le.detail +
