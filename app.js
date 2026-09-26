@@ -401,6 +401,11 @@ var API_TIMEOUT = 40000;
 var MAX_NET_TRIES = 2;
 var NET_BACKOFF = [900, 2500];
 var SLOW_ACTIONS = {
+  // التقارير: قياس فعلي على السيرفر 12–34 ثانية. كانت بتتقطع عند 40
+  // ثانية وتتعاد مرتين، فالمستخدم يستنى دقيقتين ويشوف خطأ في الآخر.
+  customersReport: 1, regionsReport: 1, dailyReport: 1, scorecard: 1,
+  visitsReport: 1, statementAudit: 1, overdueBreakdown: 1, visitIssues: 1,
+  diagnose: 1, invoiceDetailProbe: 1, expenseReport: 1, leaderboard: 1,
   backupNow: 1, archiveNow: 1, syncProducts: 1, runQoyodSync: 1, pushPending: 1,
   bulkImport: 1, finishImport: 1, importQoyodCustomers: 1, recomputeInvoiceDetails: 1,
   backfillInvoiceDetails: 1, resetTestData: 1, resetPreview: 1, dedupeDocs: 1,
@@ -520,7 +525,13 @@ async function api(action, payload, opts) {
       // تعرض السبب الحقيقي بدل كلمة "خطأ"
       throw { offline: true, busy: true, msg: res.error || 'السيرفر مشغول — جرب تاني بعد شوية' };
     }
-    if (!res.ok) throw { msg: res.error || res.message || 'حصل خطأ' };
+    if (!res.ok) {
+      // السيرفر رد ورفض. ده مكانش بيتسجّل خالص، فلما المستخدم يقول
+      // "الشاشة الفلانية مش شغالة" مكانش عندنا أي طرف خيط.
+      const why = res.error || res.message || 'حصل خطأ';
+      noteErr('رفض', action + ' — ' + why, Date.now() - t0);
+      throw { msg: why };
+    }
     return res;
   } finally {
     // في finally عشان يقفل مهما حصل: نجاح، خطأ، أوفلاين، أو انتهاء جلسة
