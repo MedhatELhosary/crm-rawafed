@@ -413,6 +413,19 @@ var SLOW_ACTIONS = {
   bankMatch: 1, sendMonthSummaryNow: 1, sendRepReportsNow: 1, sendDailySummary: 1
 };
 
+/**
+ * هل السيرفر قال صراحةً إن الجهاز ده منتهي؟
+ *
+ * الكود DEVICE من السيرفر الجديد. والنص للسيرفر القديم — عشان لو
+ * التطبيق اتحدّث قبل السيرفر، الجهاز المنتهي فعلًا يتطرد زي الأول
+ * بدل ما يفضل يجدّد في دايرة.
+ */
+function deviceRejected(e) {
+  if (!e) return false;
+  if (e.code === 'DEVICE') return true;
+  return String(e.msg || '').indexOf('انتهت صلاحية الجهاز') > -1;
+}
+
 async function api(action, payload, opts) {
   if (!API_URL || API_URL.indexOf('http') !== 0) throw { fatal: 'لسه محددتش لينك السيرفر في ملف config.js' };
   // quiet = نداء في الخلفية (تتبع، فحص حالة، تحديث صامت) — ميقفلش الشاشة
@@ -497,6 +510,13 @@ async function api(action, payload, opts) {
           // عطل شبكة مش رفض — الجلسة ممكن تكون لسه سليمة تمامًا،
           // فمنطردش المندوب على عطل مؤقت
           if (e.offline) throw { offline: true, busy: !!e.busy };
+          // السيرفر رد ورفض — بس الرفض مش دايمًا معناه إن الجهاز منتهي.
+          // أي خطأ عابر في السيرفر وقت التجديد كان بيطرد المندوب بره وهو
+          // جهازه سليم. فبنعامله زي العطل المؤقت: العملية تدخل الطابور
+          // والتجديد يتعاد مع النداء الجاي.
+          if (!deviceRejected(e)) {
+            throw { offline: true, server: true, msg: 'السيرفر مشغول — جرب تاني بعد شوية' };
+          }
         }
       }
       // خارج الـ try عن قصد: فشل النداء ده يطلع للمستخدم زي أي خطأ
@@ -530,7 +550,7 @@ async function api(action, payload, opts) {
       // "الشاشة الفلانية مش شغالة" مكانش عندنا أي طرف خيط.
       const why = res.error || res.message || 'حصل خطأ';
       noteErr('رفض', action + ' — ' + why, Date.now() - t0);
-      throw { msg: why };
+      throw { msg: why, code: res.code || '' };
     }
     return res;
   } finally {
