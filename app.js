@@ -413,13 +413,7 @@ var SLOW_ACTIONS = {
   bankMatch: 1, sendMonthSummaryNow: 1, sendRepReportsNow: 1, sendDailySummary: 1
 };
 
-/**
- * هل السيرفر قال صراحةً إن الجهاز ده منتهي؟
- *
- * الكود DEVICE من السيرفر الجديد. والنص للسيرفر القديم — عشان لو
- * التطبيق اتحدّث قبل السيرفر، الجهاز المنتهي فعلًا يتطرد زي الأول
- * بدل ما يفضل يجدّد في دايرة.
- */
+/** السيرفر قال صراحةً إن الجهاز منتهي؟ (الكود للسيرفر الجديد، والنص للقديم) */
 function deviceRejected(e) {
   if (!e) return false;
   if (e.code === 'DEVICE') return true;
@@ -510,10 +504,7 @@ async function api(action, payload, opts) {
           // عطل شبكة مش رفض — الجلسة ممكن تكون لسه سليمة تمامًا،
           // فمنطردش المندوب على عطل مؤقت
           if (e.offline) throw { offline: true, busy: !!e.busy };
-          // السيرفر رد ورفض — بس الرفض مش دايمًا معناه إن الجهاز منتهي.
-          // أي خطأ عابر في السيرفر وقت التجديد كان بيطرد المندوب بره وهو
-          // جهازه سليم. فبنعامله زي العطل المؤقت: العملية تدخل الطابور
-          // والتجديد يتعاد مع النداء الجاي.
+          // خطأ عابر وقت التجديد كان بيطرد مندوب جهازه سليم — بقى عطل مؤقت
           if (!deviceRejected(e)) {
             throw { offline: true, server: true, msg: 'السيرفر مشغول — جرب تاني بعد شوية' };
           }
@@ -1896,6 +1887,12 @@ A.visitPhotoDel = (i) => {
     `<div class="thumb"><img src="${d}"><button type="button" onclick="A.visitPhotoDel(${k})">✕</button></div>`).join('');
 };
 
+/** السيرفر قال إن الزيارة مش موجودة؟ (الكود للسيرفر الجديد، والنص للقديم) */
+function visitGone(e) {
+  if (!e || e.offline) return false;
+  return e.code === 'NO_VISIT' || String(e.msg || '') === 'الزيارة مش موجودة';
+}
+
 A.checkoutSave = async () => {
   stopMic();
   const lv = S.liveVisit;
@@ -1938,7 +1935,10 @@ A.checkoutSave = async () => {
     if (photos.length > queuedPhotos) toast('📷 الصور اترفعت', 'ok');
     if (queuedPhotos) toast('📴 ' + queuedPhotos + ' صورة هترفع لما النت يرجع', 'ok');
   } catch (e) {
-    if (e.offline) {
+    // الزيارة مش على السيرفر: كان المندوب بيتحبس فيها للأبد — التقرير يتحفظ كزيارة جديدة
+    const gone = visitGone(e);
+    if (gone) toast('ℹ️ الزيارة دي مكانتش موجودة على السيرفر — التقرير هيتحفظ كزيارة جديدة', 'ok');
+    if (e.offline || gone) {
       const [h1, m1] = lv.checkin_time.split(':').map(Number);
       const [h2, m2] = outTime.split(':').map(Number);
       const ok = await qpush('quickVisit', Object.assign({
