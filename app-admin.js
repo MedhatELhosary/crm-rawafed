@@ -1342,7 +1342,7 @@ function adCustomers() {
     <div class="table-wrap mt"><table>
       <tr><th>العميل</th><th>المنطقة</th><th>اليوم</th><th>لوكيشن</th><th>الاستحقاق</th><th>الرصيد</th><th>المتأخر</th><th>الأولوية</th><th></th></tr>
       ${list.slice(0, 200).map(c => `<tr>
-        <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(c.phone || '')}</div></td>
+        <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(phoneOf(c.phone))}</div></td>
         <td>${esc(regionName(c.region_id))}</td>
         <td>${dayLabel(c.visit_day)}</td>
         <td>${c.lat ? '✅' : '<span class="badge warm">ناقص</span>'}</td>
@@ -1365,7 +1365,7 @@ A.custForm = (id) => {
   openModal(`
     <h2>${id ? 'تعديل عميل' : 'عميل جديد'}</h2>
     <label>الاسم *</label><input id="c-name" value="${esc(c.name || '')}">
-    <label>التليفون</label><input id="c-phone" value="${esc(c.phone || '')}">
+    <label>التليفون</label><input id="c-phone" value="${esc(phoneOf(c.phone))}">
     <label>العنوان</label><input id="c-address" value="${esc(c.address || '')}">
     <div class="grid2">
       <div><label>المنطقة</label>
@@ -1614,7 +1614,7 @@ function adLeads() {
     <div class="table-wrap mt"><table>
       <tr><th>الاسم</th><th>التليفون</th><th>المنطقة</th><th>المندوب</th><th>المرحلة</th><th>المصدر</th><th></th></tr>
       ${leads.map(l => `<tr>
-        <td><b>${esc(l.name)}</b></td><td>${esc(l.phone || '—')}</td>
+        <td><b>${esc(l.name)}</b></td><td>${esc(phoneOf(l.phone) || '—')}</td>
         <td>${esc(regionName(l.region_id))}</td><td>${esc(repName(l.rep_id))}</td>
         <td><span class="badge ${l.stage === 'اتحول لعميل' ? 'cool' : 'info'}">${esc(l.stage)}</span></td>
         <td>${esc(l.source || '—')}</td>
@@ -2229,7 +2229,7 @@ function adCustReport() {
             <th>الرصيد</th><th>المتأخر</th><th>أعمار الدين</th>
             <th>زيارات</th><th>آخر زيارة</th><th>آخر دفعة</th></tr>
         ${r.rows.map(x => `<tr>
-          <td><b>${esc(x.name)}</b>${x.phone ? '<div class="muted" style="font-size:11px">' + esc(x.phone) + '</div>' : ''}</td>
+          <td><b>${esc(x.name)}</b>${x.phone ? '<div class="muted" style="font-size:11px">' + esc(phoneOf(x.phone)) + '</div>' : ''}</td>
           <td>${esc(x.region)}</td>
           <td>${x.invoices || '—'}</td>
           <td><b>${money(x.grossSales)}</b>${x.tax ? '<div class="muted" style="font-size:10px">ضريبة ' + money(x.tax) + '</div>' : ''}</td>
@@ -2287,7 +2287,7 @@ A.exportCustReport = () => {
   if (!r) return;
   downloadCsv('تفصيلي_العملاء_' + (r.from || 'من_البداية') + '_' + (r.to || 'للنهارده'),
     (r.rows || []).map(x => ({
-      'العميل': x.name, 'التليفون': x.phone, 'المنطقة': x.region, 'المندوب': x.reps,
+      'العميل': x.name, 'التليفون': phoneOf(x.phone), 'المنطقة': x.region, 'المندوب': x.reps,
       'عدد الفواتير': x.invoices,
       'المبيعات شامل الضريبة': x.grossSales, 'الضريبة': x.tax,
       'الخصم': x.discount, 'نسبة الخصم %': x.discountRate === null ? '' : x.discountRate,

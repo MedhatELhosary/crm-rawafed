@@ -7,8 +7,6 @@
 // ==================== [ core.js ] ====================
 /* CRM روافد — النواة: الحالة، الاتصال بالسيرفر، أدوات الواجهة، الدخول، والعرض الرئيسي */
 
-/* CRM روافد — التطبيق الرئيسي (مندوب + أدمن) */
-
 // ================== التخزين المحلي الآمن ==================
 /**
  * قراءة قيمة محفوظة من غير ما ترمي خطأ أبدًا.
@@ -101,6 +99,15 @@ function normDigits(s) {
     .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x0660))
     .replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x06F0))
     .trim();
+}
+/**
+ * رقم التليفون زي ما بيتكتب. شيتس بيحوّل "0535755777" لرقم 535755777
+ * فالصفر بيضيع، وزرار الاتصال كان بيطلب رقم ناقص.
+ * أي رقم من 9 أرقام في السعودية ناقصه الصفر (05… أو 01…).
+ */
+function phoneOf(p) {
+  const s = String(p == null ? '' : p).trim();
+  return /^[1-9]\d{8}$/.test(s) ? '0' + s : s;
 }
 /** الهللات بتظهر بس لما تكون موجودة — 285 تفضل 285 و327.75 متتقربش لـ 328 */
 function money(n) {
@@ -218,18 +225,6 @@ function deviceLabel() {
 }
 
 // ================== الاتصال بالسيرفر ==================
-/**
- * ============================================================
- *  طبقة التحميل
- * ============================================================
- * بتشتغل مع كل نداء للسيرفر أوتوماتيك — مش محتاجة تتحط على كل زرار.
- * ثلاث قواعد مهمة:
- *  1) بتقفل الضغط من أول لحظة (وهي لسه شفافة)، عشان الدوسة التانية
- *     على نفس الزرار متعديش. ده الهدف الأساسي منها.
- *  2) الرمادي بيظهر بعد 220ms بس — الطلب السريع ميعملش وميض مزعج.
- *  3) عداد مش true/false — عشان طلبين مع بعض ميقفلوش الطبقة على بعض،
- *     وحارس وقت بيفتحها غصب لو طلب علّق، عشان التطبيق ميتقفلش أبدًا.
- */
 var BUSY_MAX = 25000;           // أقصى وقت يفضل فيه الزرار مقفول مهما حصل
 
 /**
@@ -550,10 +545,6 @@ async function api(action, payload, opts) {
   }
 }
 
-/**
- * بيحط العملية في طابور الأوفلاين. بيرجّع false لو مساحة الجهاز خلصت —
- * السندات بقت جواها صورة، فلازم المندوب يعرف إن الحفظ فشل مش يفتكره اتحفظ.
- */
 /**
  * ============================================================
  *  مخزن الصور على الجهاز (IndexedDB)
@@ -1232,6 +1223,9 @@ A.login = async () => {
     writeLS('crm_device', S.device);
     localStorage.removeItem('crm_creds');   // مبقيناش نخزّن الرقم السري على الجهاز
     save('crm_user', S.user);
+    // الزيارة المفتوحة بتعيش بعد الخروج — كانت بترجع تظهر فجأة بعد أول
+    // قفل وفتح للتطبيق بس، فالمندوب يلاقي "زيارة جارية من امبارح"
+    S.liveVisit = readLS('crm_live_visit', null); ownLiveVisit();
     S.tab = 'today'; S.adminTab = 'dash';
     // البيانات جاية مع رد الدخول للمندوب — الأدمن لسه محتاج adminData
     if (!(res.boot && applyBoot(res.boot, true))) { render(); await refresh(); }
@@ -1433,7 +1427,7 @@ A.statementRun = async (custId) => {
           <div class="stmt-period">${esc(periodTxt)}</div>
           <div class="stmt-info">
             <span><b>العميل:</b> ${esc(r.customer.name)}</span>
-            ${r.customer.phone ? '<span><b>الجوال:</b> ' + esc(r.customer.phone) + '</span>' : ''}
+            ${r.customer.phone ? '<span><b>الجوال:</b> ' + esc(phoneOf(r.customer.phone)) + '</span>' : ''}
             ${r.customer.address ? '<span><b>العنوان:</b> ' + esc(r.customer.address) + '</span>' : ''}
             <span><b>تاريخ الإصدار:</b> ${new Date().toISOString().slice(0, 10)}</span>
           </div>
@@ -1584,7 +1578,7 @@ function custCard(c, showDay) {
     <div class="cust-actions">
       <button class="btn sm green" onclick="A.checkin('${c.id}')">✔ تسجيل وصول</button>
       <button class="btn sm ghost" onclick="A.custDetails('${c.id}')">التفاصيل</button>
-      ${c.phone ? '<a class="btn sm outline" href="tel:' + esc(c.phone) + '">📞</a>' : ''}
+      ${c.phone ? '<a class="btn sm outline" href="tel:' + esc(phoneOf(c.phone)) + '">📞</a>' : ''}
       ${c.lat ? '<a class="btn sm outline" target="_blank" href="' + mapsLink(c.lat, c.lng) + '">🧭 وديني</a>' : ''}
     </div>
   </div>`;
@@ -1599,7 +1593,7 @@ function viewToday() {
     const c = custById(S.liveVisit.customer_id);
     html += `<div class="visit-live">
       <b>🟢 زيارة جارية: ${esc(c ? c.name : '')}</b>
-      <div style="font-size:13px;opacity:.9">بدأت ${esc(S.liveVisit.checkin_time)}${S.liveVisit.inRange === false ? ' — ⚠️ بعيد عن لوكيشن العميل' : ''}</div>
+      <div style="font-size:13px;opacity:.9">بدأت ${esc(S.liveVisit.checkin_time)}${S.liveVisit.date && S.liveVisit.date !== todayISO() ? ' يوم ' + esc(S.liveVisit.date) : ''}${S.liveVisit.inRange === false ? ' — ⚠️ بعيد عن لوكيشن العميل' : ''}</div>
       <button class="btn" onclick="A.checkoutForm()">إنهاء الزيارة وكتابة التقرير ←</button>
     </div>`;
   }
@@ -1815,7 +1809,7 @@ async function doCheckin(c, pos, locationAdded) {
       toast('📴 مفيش نت — الزيارة اتسجلت محليًا وهتترفع تلقائي', 'ok');
     } else { toast(e.msg || 'خطأ', 'err'); return; }
   }
-  if (S.liveVisit && S.user) S.liveVisit.rep_id = S.user.id;
+  if (S.liveVisit && S.user) { S.liveVisit.rep_id = S.user.id; S.liveVisit.date = todayISO(); }
   save('crm_live_visit', S.liveVisit);
   S.tab = 'today';
   render();
@@ -1916,8 +1910,8 @@ A.checkoutSave = async () => {
   closeModal();
   try {
     if (lv.local || !lv.visit_id) throw { offline: true };
-    await api('checkout', Object.assign({ visit_id: lv.visit_id, op_id: opKey }, form));
-    toast('✅ الزيارة اتسجلت بنجاح', 'ok');
+    const r = await api('checkout', Object.assign({ visit_id: lv.visit_id, op_id: opKey }, form));
+    toast(r.alreadyClosed ? 'ℹ️ الزيارة دي كانت اتقفلت قبل كده' : '✅ الزيارة اتسجلت بنجاح', 'ok');
     // رفع الصور بعد ما الزيارة اتسجلت
     let queuedPhotos = 0;
     for (let i = 0; i < photos.length; i++) {
@@ -1942,10 +1936,11 @@ A.checkoutSave = async () => {
       const [h1, m1] = lv.checkin_time.split(':').map(Number);
       const [h2, m2] = outTime.split(':').map(Number);
       const ok = await qpush('quickVisit', Object.assign({
-        op_id: opKey,
-        customer_id: lv.customer_id, date: new Date().toISOString().slice(0, 10),
+        // رقم الزيارة: لو الانصراف وصل والرد ضاع، السيرفر يعرف إنها نفس الزيارة
+        op_id: opKey, visit_id: lv.visit_id || '',
+        customer_id: lv.customer_id, date: lv.date || todayISO(),
         checkin_time: lv.checkin_time, checkout_time: outTime,
-        duration_min: Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)),
+        duration_min: lv.date && lv.date !== todayISO() ? '' : Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)),
         lat: lv.lat, lng: lv.lng, distance_m: lv.distance_m, visit_type: 'ميدانية'
       }, form));
       // لو الحفظ المحلي فشل، الزيارة لازم تفضل مفتوحة — مسحها هنا كان
@@ -2213,7 +2208,7 @@ A.custDetails = (id) => {
   const visits = (S.data.visits || []).filter(v => String(v.customer_id) === String(id)).slice(-10).reverse();
   openModal(`
     <h2>${esc(c.name)}</h2>
-    <p class="modal-sub">${esc(c.address || '')} ${c.phone ? '• ' + esc(c.phone) : ''} • يوم ${dayLabel(c.visit_day)}</p>
+    <p class="modal-sub">${esc(c.address || '')} ${c.phone ? '• ' + esc(phoneOf(c.phone)) : ''} • يوم ${dayLabel(c.visit_day)}</p>
     ${priorityBadge(c)} ${c.priority_reasons ? '<div class="muted mt">' + esc(c.priority_reasons) + '</div>' : ''}
     <div class="card mt">
       <h3>💼 كشف الحساب (من قيود)</h3>
@@ -2304,7 +2299,7 @@ function viewLeads() {
         ${l.notes ? '<div class="muted mt">' + esc(l.notes) + '</div>' : ''}
         <div class="cust-actions">
           <button class="btn sm ghost" onclick="A.leadStageForm('${l.id}')">تحديث المرحلة</button>
-          ${l.phone ? '<a class="btn sm outline" href="tel:' + esc(l.phone) + '">📞</a>' : ''}
+          ${l.phone ? '<a class="btn sm outline" href="tel:' + esc(phoneOf(l.phone)) + '">📞</a>' : ''}
           ${l.lat ? '<a class="btn sm outline" target="_blank" href="' + mapsLink(l.lat, l.lng) + '">🧭</a>' : ''}
         </div>
       </div>`).join('') : '<div class="empty"><div class="big">🎯</div>مفيش ليدز هنا</div>'}`;
@@ -2437,7 +2432,7 @@ function viewMe() {
     <div class="card">
       <h3>📲 بوت تليجرام</h3>
       <p class="muted">عشان توصلك خطة يومك كل صبح على تليجرام، اطلب كود ربط وابعته للبوت.
-      الكود بيشتغل مرة واحدة ولمدة 10 دقايق.</p>
+      الكود بيشتغل مرة واحدة ولمدة نص ساعة.</p>
       <button class="btn ghost full" onclick="A.tgLinkCode()">🔗 اطلب كود ربط</button>
     </div>
     ${S.queue.length ? '<div class="card"><h3>⏳ عمليات مستنية النت (' + S.queue.length + ')</h3><button class="btn sm ghost" onclick="A.doRefresh()">حاول ترفعها دلوقتي</button></div>' : ''}
