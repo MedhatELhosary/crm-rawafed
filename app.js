@@ -792,23 +792,30 @@ async function qflush() {
   _lastFlushAt = Date.now();
   try {
     const batch = S.queue.slice(0, FLUSH_BATCH);
-    // الصور متخزنة لوحدها — بنرجّعها للحمولة وقت الإرسال بس
     const toSend = [];
     for (const it of batch) {
-      if (!it.payload || !it.payload._blobs) { toSend.push(it); continue; }
-      const blobs = await blobGet(it.payload.op_id);
-      const body = Object.assign({}, it.payload, blobs || {});
-      delete body._blobs;
+      let body = it.payload || {};
+      // الصور متخزنة لوحدها — بنرجّعها للحمولة وقت الإرسال بس
+      if (body._blobs) {
+        body = Object.assign({}, body, (await blobGet(body.op_id)) || {});
+        delete body._blobs;
+      }
+      // عمر الوصول في الطابور — السيرفر بيحسب منه وقت الوصول الحقيقي
+      if (it.action === 'checkin') body = Object.assign({}, body, { age_ms: Date.now() - (it.ts || Date.now()) });
       toSend.push({ action: it.action, payload: body, ts: it.ts });
     }
     const res = await api('syncOffline', { queue: toSend }, { quiet: true });
+    // بالمفتاح ونوع العملية: الوصول والانصراف بتاعه بيشتركوا في المفتاح
     const byId = {};
-    (res.results || []).forEach(r => { if (r.op_id) byId[r.op_id] = r; });
+    (res.results || []).forEach(r => { if (r.op_id) byId[r.op_id + '|' + (r.action || '')] = r; });
+    const resOf = it => { const k = (it.payload && it.payload.op_id) || '';
+      return byId[k + '|' + it.action] || byId[k + '|']; };
 
     const stillQueued = [];
     const rejected = [];
     batch.forEach(item => {
-      const r = byId[(item.payload && item.payload.op_id) || ''];
+      const r = resOf(item);
+      if (item.action === 'checkin') adoptCheckin(item, r);
       if (!r) { stillQueued.push(item); return; }       // السيرفر ماردش عليها — نعيد
       if (r.ok) return;                                  // وصلت — تتشال
       if (r.retryable) {
@@ -826,7 +833,7 @@ async function qflush() {
 
     // صور العمليات اللي وصلت مالهاش لزمة بعد كده
     for (const it of batch) {
-      const r = byId[(it.payload && it.payload.op_id) || ''];
+      const r = resOf(it);
       if (r && r.ok && it.payload && it.payload._blobs) await blobDel(it.payload.op_id);
     }
 
@@ -839,7 +846,11 @@ async function qflush() {
     }
 
     const done = batch.length - stillQueued.length - rejected.length;
-    if (done) { _retryStep = 0; toast('✅ اترفعت ' + done + ' عملية كانت متخزنة أوفلاين', 'ok'); }
+    // العمليات اللي لسه متسجلة (الوصول والانصراف) المندوب شاف نجاحها
+    // ساعتها — الرسالة للي كانت مستنية النت بس
+    const late = batch.filter(it => { const r = resOf(it); return r && r.ok && Date.now() - (it.ts || 0) > 60000; }).length;
+    if (done) _retryStep = 0;
+    if (late) toast('✅ اترفعت ' + late + ' عملية كانت متخزنة أوفلاين', 'ok');
     if (rejected.length) {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
     }
@@ -857,6 +868,26 @@ async function qflush() {
     /* عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة */
   } finally {
     _flushing = false;
+  }
+}
+
+/**
+ * رد السيرفر على تسجيل وصول من الطابور: الزيارة اللي بدأت على الموبايل
+ * بتاخد رقمها والمسافة. ولو اترفض، المندوب بيتقاله وبتتشال.
+ */
+function adoptCheckin(item, r) {
+  const lv = S.liveVisit;
+  if (!r || !lv || lv.op_id !== item.payload.op_id) return;
+  if (r.ok) {
+    lv.visit_id = r.visit_id || r.id || lv.visit_id;
+    if (r.distance_m !== undefined) { lv.distance_m = r.distance_m; lv.inRange = r.inRange; }
+    lv.local = false;
+    if (r.resumed) toast('↩️ كان عندك زيارة مفتوحة عند العميل ده — كمّلنا عليها', 'ok');
+    save('crm_live_visit', lv);
+  } else if (!r.retryable) {
+    toast(r.error || 'تسجيل الوصول اترفض', 'err');
+    S.liveVisit = null;
+    localStorage.removeItem('crm_live_visit');
   }
 }
 
@@ -1325,6 +1356,8 @@ function viewGpsGate() {
 }
 
 function topbar(subtitle) {
+  // العملية اللي لسه داخلة الطابور (وصول/انصراف) بتترفع في ثواني — مش "معلقة"
+  const pend = S.queue.filter(q => Date.now() - (q.ts || 0) > 20000).length;
   return `<div class="topbar">
     <div class="flex" style="flex:1;gap:10px">
       ${logoHtml(36, 'topbar-logo')}
@@ -1332,7 +1365,7 @@ function topbar(subtitle) {
     </div>
     <div class="flex" style="flex:none">
       ${(S.user && S.user.role === 'rep' && TRK.watchId !== null) ? '<span class="track-dot" title="تتبع خط السير شغال">🟢</span>' : ''}
-      ${S.queue.length ? '<span class="pending-badge">⏳ ' + S.queue.length + ' معلقة</span>' : ''}
+      ${pend ? '<span class="pending-badge">⏳ ' + pend + ' معلقة</span>' : ''}
       <span class="offline-badge">أوفلاين</span>
       <button class="btn sm ghost" onclick="A.doRefresh()" ${S.loading ? 'disabled' : ''}>${S.loading ? '⏳' : '🔄'}</button>
       ${S.user && S.user.role === 'admin' ? '<button class="btn sm ghost" onclick="A.logout()" title="تسجيل خروج">🚪 خروج</button>' : ''}
@@ -1762,11 +1795,8 @@ A.saveLocAndCheckin = async (custId, saveLoc) => {
   if (saveLoc && pos) {
     c.lat = pos.lat; c.lng = pos.lng; c.location_source = 'GPS من الموقع';
     added = true;
-    try { await api('setCustomerLocation', { customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' }); toast('📍 اتحفظ لوكيشن العميل', 'ok'); }
-    catch (e) {
-      if (!e.offline) return;
-      if (!await qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' })) return;
-    }
+    // الطابور قبل الوصول بترتيبه: السيرفر بيحفظ اللوكيشن الأول وبعدين يحسب المسافة
+    if (!await qpush('setCustomerLocation', { op_id: opId(), customer_id: custId, lat: pos.lat, lng: pos.lng, source: 'gps' })) return;
   }
   await doCheckin(c, pos, added);
 };
@@ -1787,32 +1817,31 @@ A.pickLocForCustomer = (custId, thenCheckin) => {
   });
 };
 
-/** locationAdded = اتحدد لوكيشن العميل كجزء من الزيارة دي — بيتسجل على الزيارة للتقرير */
+/**
+ * locationAdded = اتحدد لوكيشن العميل كجزء من الزيارة دي — بيتسجل على الزيارة للتقرير
+ *
+ * الزيارة بتبدأ على الموبايل فورًا، والوصول بيدخل الطابور ويترفع في الخلفية
+ * (رقم الزيارة بيوصل بعدين — adoptCheckin). قبل كده المندوب كان بيستنى
+ * السيرفر 3 لـ 10 ثواني قدام العميل، وأي رد ضايع كان بيعلّق الزيارة.
+ * مفتاح واحد لدورة الزيارة كلها: الوصول والانصراف بيتعرفوا ببعض على السيرفر.
+ */
 async function doCheckin(c, pos, locationAdded) {
   const nowTime = new Date().toTimeString().slice(0, 5);
   if (pos) pushTrackPoint(pos.lat, pos.lng, pos.acc, 'وصول: ' + c.name);
-  // مفتاح واحد لدورة الزيارة كلها — لو الرد ضاع وأعاد، السيرفر يعرف إنها نفس الزيارة
   const payload = { customer_id: c.id, lat: pos ? pos.lat : '', lng: pos ? pos.lng : '',
                     location_added: !!locationAdded, op_id: opId() };
-  try {
-    const res = await api('checkin', payload);
-    S.liveVisit = { visit_id: res.visit_id, customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: res.distance_m, inRange: res.inRange, local: false };
-    if (res.resumed) toast('↩️ عندك زيارة مفتوحة عند ' + c.name + ' — كمّلنا عليها', 'ok');
-    else if (res.inRange === false) toast('⚠️ إنت على بعد ' + res.distance_m + ' م من لوكيشن العميل المسجل', 'err');
-    else toast('✅ اتسجل وصولك عند ' + c.name, 'ok');
-  } catch (e) {
-    if (e.offline) {
-      const dm = (pos && c.lat) ? distMeters(pos.lat, pos.lng, Number(c.lat), Number(c.lng)) : '';
-      // بنحتفظ بمفتاح الزيارة — لو السيرفر كان سجّلها فعلًا والرد ضاع،
-      // المفتاح ده بيخلي الإرسال الجاي يتعرف عليها بدل ما يعملها تاني
-      S.liveVisit = { visit_id: '', customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng, distance_m: dm, inRange: null, local: true, op_id: payload.op_id };
-      toast('📴 مفيش نت — الزيارة اتسجلت محليًا وهتترفع تلقائي', 'ok');
-    } else { toast(e.msg || 'خطأ', 'err'); return; }
-  }
-  if (S.liveVisit && S.user) { S.liveVisit.rep_id = S.user.id; S.liveVisit.date = todayISO(); }
+  if (!await qpush('checkin', payload)) return;      // الحفظ على الجهاز فشل — qpush قالت السبب
+  const dm = (pos && c.lat) ? distMeters(pos.lat, pos.lng, Number(c.lat), Number(c.lng)) : '';
+  const geo = Number(((S.data || {}).settings || {}).GEOFENCE_METERS) || 150;
+  S.liveVisit = { visit_id: '', customer_id: c.id, checkin_time: nowTime, lat: payload.lat, lng: payload.lng,
+                  distance_m: dm, inRange: dm === '' ? null : dm <= geo, local: true, op_id: payload.op_id,
+                  rep_id: S.user && S.user.id, date: todayISO() };
   save('crm_live_visit', S.liveVisit);
+  if (S.liveVisit.inRange === false) toast('⚠️ إنت على بعد ' + dm + ' م من لوكيشن العميل المسجل', 'err');
+  else toast(navigator.onLine ? '✅ اتسجل وصولك عند ' + c.name : '📴 مفيش نت — الوصول اتسجل وهيترفع تلقائي', 'ok');
   S.tab = 'today';
   render();
+  qflush().then(() => scheduleFlush(false));
 }
 
 // ----- إنهاء الزيارة -----
@@ -1881,12 +1910,12 @@ A.visitPhotoDel = (i) => {
     `<div class="thumb"><img src="${d}"><button type="button" onclick="A.visitPhotoDel(${k})">✕</button></div>`).join('');
 };
 
-/** السيرفر قال إن الزيارة مش موجودة؟ (الكود للسيرفر الجديد، والنص للقديم) */
-function visitGone(e) {
-  if (!e || e.offline) return false;
-  return e.code === 'NO_VISIT' || String(e.msg || '') === 'الزيارة مش موجودة';
-}
-
+/**
+ * الانصراف بيدخل الطابور على طول: الزيارة بتتقفل على الموبايل فورًا والسيرفر
+ * بيتأكد في الخلفية. قبل كده المندوب كان بيستنى السيرفر، ولو الرد ضاع كانت
+ * الزيارة بتفضل معلّقة عنده أو بتتسجل مرتين. رقم الزيارة ومفتاح الوصول
+ * معاه، فالسيرفر بيقفل نفس الزيارة — ولو كانت اتقفلت قبل كده مبيكتبش فوقها.
+ */
 A.checkoutSave = async () => {
   stopMic();
   const lv = S.liveVisit;
@@ -1903,70 +1932,37 @@ A.checkoutSave = async () => {
   }
   const photos = (A._visitPhotos || []).slice();
   const outTime = new Date().toTimeString().slice(0, 5);
-  // المفتاح بيتولّد دلوقتي — قبل أي محاولة إرسال. لو الرد ضاع بعد ما
-  // السيرفر نفّذ، النسخة اللي هتتعاد بتحمل نفس المفتاح فالسيرفر يعرفها.
-  const opKey = (lv && lv.op_id) || opId();
+  const opKey = lv.op_id || opId();
   if (S.myPos) pushTrackPoint(S.myPos.lat, S.myPos.lng, S.myPos.acc, 'انصراف: ' + (c ? c.name : ''));
   closeModal();
-  try {
-    if (lv.local || !lv.visit_id) throw { offline: true };
-    const r = await api('checkout', Object.assign({ visit_id: lv.visit_id, op_id: opKey }, form));
-    toast(r.alreadyClosed ? 'ℹ️ الزيارة دي كانت اتقفلت قبل كده' : '✅ الزيارة اتسجلت بنجاح', 'ok');
-    // رفع الصور بعد ما الزيارة اتسجلت
-    let queuedPhotos = 0;
-    for (let i = 0; i < photos.length; i++) {
-      try {
-        toast('⏳ برفع صورة ' + (i + 1) + ' من ' + photos.length);
-        await uploadAttachment('visit', lv.visit_id, 'photo', photos[i]);
-      } catch (err) {
-        // الصورة اللي مترفعتش تدخل الطابور — قبل كده كانت بتضيع خالص
-        if (await qpush('uploadAttachment', {
-          op_id: opId(), kind: 'visit', id: lv.visit_id, type: 'photo', data: photos[i]
-        })) queuedPhotos++;
-        else toast('صورة ' + (i + 1) + ' مترفعتش: ' + (err.msg || ''), 'err');
-      }
-    }
-    if (photos.length > queuedPhotos) toast('📷 الصور اترفعت', 'ok');
-    if (queuedPhotos) toast('📴 ' + queuedPhotos + ' صورة هترفع لما النت يرجع', 'ok');
-  } catch (e) {
-    // الزيارة مش على السيرفر: كان المندوب بيتحبس فيها للأبد — التقرير يتحفظ كزيارة جديدة
-    const gone = visitGone(e);
-    if (gone) toast('ℹ️ الزيارة دي مكانتش موجودة على السيرفر — التقرير هيتحفظ كزيارة جديدة', 'ok');
-    if (e.offline || gone) {
-      const [h1, m1] = lv.checkin_time.split(':').map(Number);
-      const [h2, m2] = outTime.split(':').map(Number);
-      const ok = await qpush('quickVisit', Object.assign({
-        // رقم الزيارة: لو الانصراف وصل والرد ضاع، السيرفر يعرف إنها نفس الزيارة
-        op_id: opKey, visit_id: lv.visit_id || '',
-        customer_id: lv.customer_id, date: lv.date || todayISO(),
-        checkin_time: lv.checkin_time, checkout_time: outTime,
-        duration_min: lv.date && lv.date !== todayISO() ? '' : Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)),
-        lat: lv.lat, lng: lv.lng, distance_m: lv.distance_m, visit_type: 'ميدانية'
-      }, form));
-      // لو الحفظ المحلي فشل، الزيارة لازم تفضل مفتوحة — مسحها هنا كان
-      // بيضيّع تقرير المندوب وهو شايف رسالة نجاح خضرا
-      if (!ok) { qflush(); return; }
-      // الصور بتتحفظ كعمليات منفصلة بترتيبها بعد الزيارة، وبتشاور عليها
-      // بمفتاح عمليتها لأن رقم الزيارة لسه مش موجود
-      let savedPhotos = 0;
-      for (let i = 0; i < photos.length; i++) {
-        if (await qpush('uploadAttachment', {
-          op_id: opId(), kind: 'visit', visit_op_id: opKey, type: 'photo', data: photos[i]
-        })) savedPhotos++;
-      }
-      toast('📴 التقرير' + (savedPhotos ? ' و' + savedPhotos + ' صورة' : '') +
-            ' اتحفظوا محليًا وهيترفعوا تلقائي', 'ok');
-      if (savedPhotos < photos.length) {
-        toast('⚠️ ' + (photos.length - savedPhotos) + ' صورة مااتحفظتش — مساحة الجهاز', 'err');
-      }
-    } else { toast(e.msg || 'خطأ', 'err'); return; }
+  const [h1, m1] = lv.checkin_time.split(':').map(Number);
+  const [h2, m2] = outTime.split(':').map(Number);
+  const ok = await qpush('quickVisit', Object.assign({
+    op_id: opKey, visit_id: lv.visit_id || '',
+    customer_id: lv.customer_id, date: lv.date || todayISO(),
+    checkin_time: lv.checkin_time, checkout_time: outTime,
+    duration_min: lv.date && lv.date !== todayISO() ? '' : Math.max(0, (h2 * 60 + m2) - (h1 * 60 + m1)),
+    lat: lv.lat, lng: lv.lng, distance_m: lv.distance_m, visit_type: 'ميدانية'
+  }, form));
+  // لو الحفظ المحلي فشل، الزيارة لازم تفضل مفتوحة — مسحها هنا كان
+  // بيضيّع تقرير المندوب وهو شايف رسالة نجاح خضرا
+  if (!ok) { qflush(); return; }
+  // الصور بعد الزيارة بترتيبها: برقم الزيارة لو وصل، وإلا بمفتاح عمليتها
+  let savedPhotos = 0;
+  for (let i = 0; i < photos.length; i++) {
+    if (await qpush('uploadAttachment', Object.assign({ op_id: opId(), kind: 'visit', type: 'photo', data: photos[i] },
+      lv.visit_id ? { id: lv.visit_id } : { visit_op_id: opKey }))) savedPhotos++;
   }
-  if (c && form.status === 'تمت') c.last_visit_date = new Date().toISOString().slice(0, 10);
+  toast((navigator.onLine ? '✅ الزيارة اتسجلت' : '📴 الزيارة اتحفظت وهتترفع لما النت يرجع') +
+        (savedPhotos ? ' — ومعاها ' + savedPhotos + ' صورة' : ''), 'ok');
+  if (savedPhotos < photos.length) {
+    toast('⚠️ ' + (photos.length - savedPhotos) + ' صورة مااتحفظتش — مساحة الجهاز', 'err');
+  }
+  if (c && form.status === 'تمت') c.last_visit_date = todayISO();
   S.liveVisit = null;
   localStorage.removeItem('crm_live_visit');
   render();
-  qflush();
-  refresh(true);
+  qflush().then(() => scheduleFlush(false));
 }
 
 // ----- تبويب المتابعات ووعود الدفع -----
@@ -2773,12 +2769,6 @@ function shrinkImage(file, maxSide, quality) {
     reader.onerror = () => reject(new Error('مقدرتش أقرا الملف'));
     reader.readAsDataURL(file);
   });
-}
-
-async function uploadAttachment(kind, id, type, dataUrl) {
-  if (!navigator.onLine) throw { msg: 'المرفقات محتاجة نت — سجل الحركة والصور ارفعها بعدين' };
-  const r = await api('uploadAttachment', { kind: kind, id: id, type: type, data: dataUrl });
-  return r.url;
 }
 
 // ================== الطلبات وسندات القبض ==================
