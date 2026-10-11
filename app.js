@@ -367,17 +367,9 @@ var READ_ACTIONS = {
 };
 
 /**
- * هل ينفع نعيد النداء ده لو النقل فشل؟
- *
- * القياس بيقول إن Apps Script بيفشل من غير سبب واحد من كل تلاتة تقريبًا،
- * والسيرفر بينفّذ في 20 جزء من الثانية — يعني الفشل في النقل مش في الكود.
- * وإعادة المحاولة بتحوّل الفشل ده لنجاح.
- *
- * بس مينفعش نعيد على عماها: التحويل بيتم **بعد** ما الكود يتنفّذ، فالفشل
- * ميعنيش إن العملية متنفذتش. فبنعيد بس لو:
- *   • الأمر قراءة (مبيغيّرش حاجة)، أو
- *   • الحمولة فيها مفتاح عملية — وساعتها opGuard على السيرفر بيمنع التكرار
- * أي أمر تاني (زي بعت طلب لقيود أو حفظ مستخدم) بيفضل من غير إعادة.
+ * نعيد النداء لو النقل فشل؟ Apps Script بيفشل في النقل واحد من كل تلاتة،
+ * والفشل ممكن يكون **بعد** ما الكود اتنفّذ — فبنعيد بس لو الأمر قراءة،
+ * أو الحمولة فيها مفتاح عملية (opGuard على السيرفر بيمنع التكرار).
  */
 function canRetry(action, payload) {
   if (READ_ACTIONS[action]) return true;
@@ -546,17 +538,9 @@ async function api(action, payload, opts) {
 }
 
 /**
- * ============================================================
- *  مخزن الصور على الجهاز (IndexedDB)
- * ============================================================
- * الصور (سند القبض وصور الزيارة) كانت بتتحفظ جوه الطابور في
- * localStorage. سقف localStorage حوالي 5 ميجا، والصورة الواحدة ممكن
- * توصل 4 — يعني سند أو اتنين وتمتلي، وساعتها writeLS بتمسح بيانات
- * التطبيق عشان تفضي مكان، فالمندوب يرجع يلاقي قايمة عملاء فاضية
- * ومفيش نت يملّيها.
- *
- * دلوقتي: بيانات الطابور (صغيرة) تفضل في localStorage عشان تتقري
- * فورًا وقت الإقلاع، والصور في IndexedDB — مساحتها مئات الميجا.
+ * مخزن الصور على الجهاز (IndexedDB). الصور كانت جوه الطابور في
+ * localStorage (سقفه ~5 ميجا) — سند أو اتنين وتمتلي، و writeLS تمسح
+ * بيانات التطبيق. الطابور نفسه (صغير) يفضل في localStorage.
  */
 var IDB_NAME = 'crm_rawafed', IDB_STORE = 'blobs', _idb = null;
 
@@ -777,14 +761,9 @@ function scheduleFlush(reset) {
 }
 
 /**
- * رفع الطابور.
- *
- * القاعدة: **مبنمسحش غير اللي السيرفر أكّد إنه وصل**. قبل كده كنا بنمسح
- * الدفعة كلها لمجرد إن الطلب رجع، والسيرفر كان بيرجّع ok:true دايمًا —
- * فعملية مرفوضة كانت بتختفي والمندوب يشوف رسالة نجاح.
- *
- * واللي بيترفض رفض منطقي (مش عطل شبكة) بينتقل لقايمة "محتاجة تدخّل"
- * بدل ما يفضل يتعاد للأبد ويعطّل اللي وراه.
+ * رفع الطابور: **مبنمسحش غير اللي السيرفر أكّد إنه وصل** (كنا بنمسح
+ * الدفعة كلها لمجرد إن الطلب رجع). المرفوض منطقيًا بيروح لقايمة
+ * "محتاجة تدخّل" بدل ما يتعاد للأبد ويعطّل اللي وراه.
  */
 // نسختين من التطبيق كانوا بيبعتوا نفس الطابور سوا (10 أكتوبر) — التانية
 // بتستنى القفل وتعطّل الباقي. العلامة مشتركة بين النسخ، ودقيقة كفاية.
@@ -794,9 +773,18 @@ function flushBusyElsewhere() {
 function markFlush(on) {
   try { on ? localStorage.setItem('crm_flush_at', String(Date.now())) : localStorage.removeItem('crm_flush_at'); } catch (e) {}
 }
+// تشخيص الطابور المتأخر: كام محاولة فشلت (f) وكام مرة الموبايل قال مفيش نت (o)
+function qdiag(key, kind) {
+  let d = {};
+  try { d = JSON.parse(localStorage.getItem('crm_qdiag') || '{}') || {};
+    if (key) { d[key] = (d[key] || 0) + 1; if (kind) d.k = kind; localStorage.setItem('crm_qdiag', JSON.stringify(d)); }
+  } catch (e) {}
+  return d;
+}
 
 async function qflush() {
-  if (_flushing || !S.queue.length || !navigator.onLine || flushBusyElsewhere()) return;
+  if (_flushing || !S.queue.length || flushBusyElsewhere()) return;
+  if (!navigator.onLine) { qdiag('o'); return; }
   _flushing = true;
   markFlush(true);
   _lastFlushAt = Date.now();
@@ -815,7 +803,8 @@ async function qflush() {
       if (it.action === 'checkin') body = Object.assign({}, body, { age_ms: Date.now() - (it.ts || Date.now()) });
       toSend.push({ action: it.action, payload: body, ts: it.ts });
     }
-    const res = await api('syncOffline', { queue: toSend }, { quiet: true });
+    const res = await api('syncOffline', { queue: toSend, diag: qdiag(),
+      oldest_ms: Date.now() - Math.min.apply(null, batch.map(it => it.ts || Date.now())) }, { quiet: true });
     // بالمفتاح ونوع العملية: الوصول والانصراف بتاعه بيشتركوا في المفتاح
     const byId = {};
     (res.results || []).forEach(r => { if (r.op_id) byId[r.op_id + '|' + (r.action || '')] = r; });
@@ -860,7 +849,7 @@ async function qflush() {
     // العمليات اللي لسه متسجلة (الوصول والانصراف) المندوب شاف نجاحها
     // ساعتها — الرسالة للي كانت مستنية النت بس
     const late = batch.filter(it => { const r = resOf(it); return r && r.ok && Date.now() - (it.ts || 0) > 60000; }).length;
-    if (done) _retryStep = 0;
+    if (done) { _retryStep = 0; try { localStorage.removeItem('crm_qdiag'); } catch (e) {} }
     if (late) toast('✅ اترفعت ' + late + ' عملية كانت متخزنة أوفلاين', 'ok');
     if (rejected.length) {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
@@ -873,7 +862,8 @@ async function qflush() {
     // من 30 عملية كان بيعمل كده 3 مرات
     else if (done) refresh(true);
   } catch (e) {
-    /* عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة */
+    // عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة
+    qdiag('f', e && (e.timeout ? 'مهلة' : e.server ? 'السيرفر ' + (e.status || '') : 'شبكة'));
   } finally {
     _flushing = false;
     markFlush(false);
@@ -902,17 +892,10 @@ function adoptCheckin(item, r) {
 }
 
 /**
- * بصمات الأقسام اللي إحنا فعلًا ماسكينها.
- *
- * ده أهم شرط في التحديث الجزئي كله. السيرفر لما بيشوف بصمة مطابقة
- * بيشيل القسم من الرد ويقول "مفيش تغيير"، والتطبيق المفروض يرجّعه من
- * نسخته المحفوظة. لكن لو القسم كان ضايع من النسخة المحفوظة وبصمته
- * فضلت موجودة، بيحصل فخ مقفول: السيرفر مبيبعتوش لأن البصمة مطابقة،
- * والتطبيق مبيلاقيش حاجة يرجّع بيها — فالبيانات تفضل فاضية للأبد،
- * حتى بعد ما التطبيق يتقفل ويتفتح، لأن النسخة الناقصة هي اللي متخزنة.
- *
- * فبنبعت بصمة القسم بس لو القسم موجود. أي قسم ناقص بصمته مبتتبعتش،
- * فالسيرفر بيبعته كامل — والجهاز اللي كان متعلّق بيصلّح نفسه لوحده.
+ * بصمات الأقسام اللي إحنا فعلًا ماسكينها — أهم شرط في التحديث الجزئي.
+ * قسم ضايع وبصمته موجودة = السيرفر مبيبعتوش (البصمة مطابقة) والتطبيق
+ * مالوش حاجة يرجّعها، فالبيانات تفضل فاضية للأبد. فالقسم الناقص
+ * بصمته مبتتبعتش، والسيرفر يبعته كامل.
  */
 function usableHashes(data) {
   if (!data || !data.hashes) return null;
