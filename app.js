@@ -786,10 +786,21 @@ function scheduleFlush(reset) {
  * واللي بيترفض رفض منطقي (مش عطل شبكة) بينتقل لقايمة "محتاجة تدخّل"
  * بدل ما يفضل يتعاد للأبد ويعطّل اللي وراه.
  */
+// نسختين من التطبيق كانوا بيبعتوا نفس الطابور سوا (10 أكتوبر) — التانية
+// بتستنى القفل وتعطّل الباقي. العلامة مشتركة بين النسخ، ودقيقة كفاية.
+function flushBusyElsewhere() {
+  try { return Date.now() - Number(localStorage.getItem('crm_flush_at') || 0) < 60000; } catch (e) { return false; }
+}
+function markFlush(on) {
+  try { on ? localStorage.setItem('crm_flush_at', String(Date.now())) : localStorage.removeItem('crm_flush_at'); } catch (e) {}
+}
+
 async function qflush() {
-  if (_flushing || !S.queue.length || !navigator.onLine) return;
+  if (_flushing || !S.queue.length || !navigator.onLine || flushBusyElsewhere()) return;
   _flushing = true;
+  markFlush(true);
   _lastFlushAt = Date.now();
+  let again = false;
   try {
     const batch = S.queue.slice(0, FLUSH_BATCH);
     const toSend = [];
@@ -855,20 +866,19 @@ async function qflush() {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
     }
     render();
-    // فيه باقي؟ نكمّل
-    if (S.queue.length && (done || stillQueued.length < batch.length)) {
-      _flushing = false;
-      return qflush();
-    }
+    // فيه باقي؟ نكمّل بعد الـ finally — جوه الـ try كان القفل بيتفك والدفعة التانية شغالة
+    if (S.queue.length && (done || stillQueued.length < batch.length)) again = true;
     // التحديث بعد ما الطابور كله يخلص، مش مع كل دفعة: كل نداء تحديث
     // بيقرا بيانات المندوب كاملة من السيرفر ويعيد بناء الشاشة، وطابور
     // من 30 عملية كان بيعمل كده 3 مرات
-    if (done) refresh(true);
+    else if (done) refresh(true);
   } catch (e) {
     /* عطل شبكة — الطابور زي ما هو، ومفتاح العملية بيمنع التكرار عند الإعادة */
   } finally {
     _flushing = false;
+    markFlush(false);
   }
+  if (again) return qflush();
 }
 
 /**
