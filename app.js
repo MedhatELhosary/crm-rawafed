@@ -2254,19 +2254,19 @@ A.quickCall = (custId) => {
       <button class="btn outline" onclick="A.closeModal()">إلغاء</button>
     </div>`);
 };
+// بتتحفظ على الموبايل الأول وتتبعت في الخلفية — زي الوصول والانصراف.
+// كانت بتستنى السيرفر (11–20 ثانية، 12 أكتوبر)، ولو التطبيق اتقفل قبل
+// ما الطلب يوصل كانت بتضيع. والتاريخ محلي (كان UTC: بعد 12 بالليل لحد
+// 3 الفجر كانت بتتسجل باليوم اللي فات)
 A.quickCallSave = async (custId) => {
   const payload = {
-    op_id: opId(),                       // مفتاح واحد للمحاولة الأونلاين وللإعادة
-    customer_id: custId, visit_type: 'هاتفية', status: 'تمت',
-    outcome: $('#v-outcome').value, report: $('#v-report').value.trim(),
-    date: new Date().toISOString().slice(0, 10)
+    op_id: opId(), customer_id: custId, visit_type: 'هاتفية', status: 'تمت',
+    outcome: $('#v-outcome').value, report: $('#v-report').value.trim(), date: todayISO()
   };
+  if (!await qpush('quickVisit', payload)) return;       // المودال يفضل مفتوح والتقرير مكتوب
   closeModal();
-  try { await api('quickVisit', payload); toast('✅ اتسجلت', 'ok'); refresh(true); }
-  catch (e) {
-    if (e.offline) { if (await qpush('quickVisit', payload)) toast('📴 اتحفظت محليًا', 'ok'); }
-    else toast(e.msg || 'خطأ', 'err');
-  }
+  toast(navigator.onLine ? '✅ اتسجلت' : '📴 اتحفظت وهتترفع لما النت يرجع', 'ok');
+  qflush().then(() => scheduleFlush(false));
 };
 
 // ----- الليدز -----
