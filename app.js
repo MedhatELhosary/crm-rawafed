@@ -849,7 +849,8 @@ async function qflush() {
     // العمليات اللي لسه متسجلة (الوصول والانصراف) المندوب شاف نجاحها
     // ساعتها — الرسالة للي كانت مستنية النت بس
     const late = batch.filter(it => { const r = resOf(it); return r && r.ok && Date.now() - (it.ts || 0) > 60000; }).length;
-    if (done) { _retryStep = 0; try { localStorage.removeItem('crm_qdiag'); } catch (e) {} }
+    // العدّاد بيتصفّر لما الطابور كله يخلص — مش أول دفعة (13 أكتوبر: الدفعة التانية قالت "التطبيق كان مقفول" غلط)
+    if (done) { _retryStep = 0; if (!S.queue.length) try { localStorage.removeItem('crm_qdiag'); } catch (e) {} }
     if (late) toast('✅ اترفعت ' + late + ' عملية كانت متخزنة أوفلاين', 'ok');
     if (rejected.length) {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
