@@ -190,7 +190,7 @@ async function syncLogo() {
   if (hash === undefined) return;
   if (!hash) {
     if (localStorage.getItem('crm_logo')) {
-      localStorage.removeItem('crm_logo'); localStorage.removeItem('crm_logo_hash'); render();
+      localStorage.removeItem('crm_logo'); localStorage.removeItem('crm_logo_hash'); bgRender();
     }
     return;
   }
@@ -200,7 +200,7 @@ async function syncLogo() {
     if (r.logo) {
       writeLS('crm_logo', r.logo);
       writeLS('crm_logo_hash', r.hash || hash);
-      render();
+      bgRender();
     }
   } catch (e) { /* هنجيبه المرة الجاية */ }
 }
@@ -469,14 +469,9 @@ async function api(action, payload, opts) {
     }
     noteServerTime(action, res);
     // بيانات محدّثة جت مع الرد — نطبّقها ونستغنى عن نداء التحديث
-    if (res && res.ok && res.boot) { applyBoot(res.boot, true); render(); }
-    // الجلسة انتهت — نجددها بتوكن الجهاز (مش بالرقم السري)، ولو فشل نرجّعه لشاشة الدخول
-    //
-    // مهم جدًا: الطرد بيحصل **بس** لما التجديد نفسه يترفض. قبل كده
-    // النداء المعاد كان جوه نفس الـ try، فأي فشل فيه — السيرفر مشغول،
-    // انقطاع شبكة لحظة، حتى رفض منطقي عادي — كان بيقع في الـ catch
-    // ويتنفّذ doLogout(). ودي كانت سبب إن المندوب بيلاقي نفسه مطرود
-    // فجأة في نص اليوم ولازم يكتب اسمه ورقمه السري من الأول.
+    if (res && res.ok && res.boot) { applyBoot(res.boot, true); bgRender(); }
+    // الجلسة انتهت — نجددها بتوكن الجهاز. الطرد **بس** لما التجديد نفسه يترفض
+    // (أي فشل عابر في النداء المعاد كان بيطرد المندوب في نص اليوم)
     if (res.error === 'AUTH' && !(opts && opts.noRetry)) {
       let renewed = false;
       if (S.device) {
@@ -514,13 +509,8 @@ async function api(action, payload, opts) {
           busyTry: tries + 1, quiet: true
         }));
       }
-      // السيرفر رجّع busy قبل ما ينفّذ أي حاجة — يعني العملية متنفذتش
-      // بالتأكيد. ده بالظبط نفس وضع "مفيش نت"، فنرميها كده عشان
-      // العملية تدخل الطابور وتتعاد لوحدها، بدل ما المندوب يقف قدام
-      // شاشة مقفولة دقيقة كاملة وبعدين يشوف "حصل خطأ" ويفقد شغله.
-      // ومفتاح العملية هو اللي بيضمن إنها متتسجلش مرتين.
-      // msg موجودة عشان الشاشات اللي مش بتفحص offline (شاشات الأدمن مثلًا)
-      // تعرض السبب الحقيقي بدل كلمة "خطأ"
+      // busy = متنفذتش بالتأكيد، زي "مفيش نت": تدخل الطابور وتتعاد (المفتاح
+      // بيمنع التكرار). msg للشاشات اللي مش بتفحص offline
       throw { offline: true, busy: true, msg: res.error || 'السيرفر مشغول — جرب تاني بعد شوية' };
     }
     if (!res.ok) {
@@ -721,15 +711,9 @@ A.clearFailed = async () => {
 };
 
 /**
- * إعادة المحاولة التلقائية.
- *
- * قبل كده الطابور كان بيترفع في 4 حالات بس (رجوع النت، إنهاء زيارة،
- * فتح التطبيق، زرار التحديث) — ومن غير أي مؤقت. و navigator.onLine على
- * أندرويد بيقول إن فيه شبكة وهي مش شغالة فعلًا، فمندوب خرج من نفق من
- * غير ما يتطلق حدث "online" كان ممكن يفضل بالطابور كله لآخر اليوم.
- *
- * دلوقتي فيه مؤقت بتدرّج: كل ما محاولة تفشل، المدة تزيد — عشان
- * مانستهلكش بطارية ولا شبكة على الفاضي.
+ * إعادة المحاولة التلقائية بمؤقت متدرّج (المدة بتزيد مع كل فشل).
+ * navigator.onLine على أندرويد ممكن يقول فيه شبكة وهي مش شغالة، فمن غير
+ * مؤقت الطابور كان ممكن يفضل لآخر اليوم.
  */
 var _retryTimer = null, _retryStep = 0;
 var RETRY_STEPS = [15000, 30000, 60000, 120000, 300000];
@@ -855,7 +839,7 @@ async function qflush() {
     if (rejected.length) {
       toast('⚠️ ' + rejected.length + ' عملية اترفضت — شوفها في صفحتك', 'err');
     }
-    render();
+    bgRender();
     // فيه باقي؟ نكمّل بعد الـ finally — جوه الـ try كان القفل بيتفك والدفعة التانية شغالة
     if (S.queue.length && (done || stillQueued.length < batch.length)) again = true;
     // التحديث بعد ما الطابور كله يخلص، مش مع كل دفعة: كل نداء تحديث
@@ -990,7 +974,7 @@ async function doRefreshOnce(silent) {
     }
   }
   S.loading = false;
-  render();
+  silent ? bgRender() : render();
 }
 
 // ================== أدوات الواجهة ==================
@@ -1284,6 +1268,23 @@ function loadAdminJs() {
   return _adminJs;
 }
 
+/**
+ * رسم من الخلفية (الطابور خلص، رد السيرفر، خطأ GPS عابر): لو المستخدم بيكتب
+ * في خانة على الشاشة، الرسم بيستنى لما يسيبها — كانت بتتمسح وتتبني تاني
+ * والحروف تضيع. وبعد ما يسيبها بـ 300 جزء من الثانية عشان ضغطته متضيعش.
+ * بنبص كل 400 مش بنستنى blur: خانة اتشالت وهي مفتوحة ممكن متبعتش blur،
+ * وساعتها الرسم كان هيفضل مستني للأبد.
+ */
+var _bgWait = null;
+function bgRender() {
+  const el = document.activeElement, app = $('#app');
+  if (!el || !app || !app.contains(el) || !/^(INPUT|TEXTAREA)$/.test(el.tagName)) return render();
+  if (_bgWait) return;
+  _bgWait = setInterval(() => {
+    if (document.activeElement === el && document.body.contains(el)) return;
+    clearInterval(_bgWait); _bgWait = null; setTimeout(render, 300);
+  }, 400);
+}
 function render() {
   const app = $('#app');
   document.body.classList.toggle('is-offline', !navigator.onLine);
@@ -1383,7 +1384,7 @@ function termsOf(c) { return Number(c.payment_terms) > 0 ? Number(c.payment_term
 A.loadSales = async () => {
   if (A._salesLoading) return;
   A._salesLoading = true;
-  try { const r = await api('salesData', {}); S.sales = r; render(); }
+  try { const r = await api('salesData', {}); S.sales = r; bgRender(); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
   finally { A._salesLoading = false; }
 };
@@ -1998,7 +1999,7 @@ function viewFollowups() {
 A.loadFollowups = async () => {
   if (A._fuLoading) return;
   A._fuLoading = true;
-  try { S.fu = await api('followups', {}); render(); }
+  try { S.fu = await api('followups', {}); bgRender(); }
   catch (e) { if (!e.offline) toast(e.msg || 'خطأ', 'err'); }
   finally { A._fuLoading = false; }
 };
@@ -3231,7 +3232,7 @@ function handleTrackError(err) {
   } else {                            // الـ GPS مقفول أو مش لاقي إشارة
     TRK.failCount++;
   }
-  render();
+  bgRender();
 }
 
 /** فحص إذن الموقع — بيتنادى أول ما المندوب يدخل ولما يضغط "افحص تاني" */
@@ -3249,7 +3250,7 @@ async function checkGpsPermission() {
         st.onchange = () => {
           if (st.state === 'granted') { TRK.denied = false; TRK.failCount = 0; ensureTracking(true); }
           else if (st.state === 'denied') { TRK.denied = true; TRK.failCount = 99; }
-          render();
+          bgRender();
         };
       }
     }

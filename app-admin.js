@@ -119,7 +119,7 @@ A.loadScorecard = async (force) => {
     S.scorecardErr = e.msg || 'مش قادر أجيب التقييم دلوقتي';
   }
   S.scorecardLoading = false;
-  if (S.adminTab === 'dash') render();
+  if (S.adminTab === 'dash') bgRender();
 };
 
 // ----- لوحة المتابعة -----
