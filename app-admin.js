@@ -1339,9 +1339,10 @@ function adCustomers() {
         ${regions.map(r => `<option value="${r.id}" ${String(S.custDay) === String(r.id) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}
       </select>
     </div>
-    <div class="table-wrap mt"><table>
+    <p class="muted mt">معروض ${list.length} عميل${list.length !== (S.data.customers || []).length ? ' من ' + (S.data.customers || []).length : ''}</p>
+    <div class="table-wrap"><table>
       <tr><th>العميل</th><th>المنطقة</th><th>اليوم</th><th>لوكيشن</th><th>الاستحقاق</th><th>الرصيد</th><th>المتأخر</th><th>الأولوية</th><th></th></tr>
-      ${list.slice(0, 200).map(c => `<tr>
+      ${list.map(c => `<tr>
         <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(phoneOf(c.phone))}</div></td>
         <td>${esc(regionName(c.region_id))}</td>
         <td>${dayLabel(c.visit_day)}</td>
@@ -1355,8 +1356,7 @@ function adCustomers() {
           <button class="btn sm outline" onclick="A.overdueDetails('${c.id}')" title="تفاصيل حساب المتأخرات">🔬</button>
           <button class="btn sm outline" onclick="A.traceCustomer('${c.id}')" title="مصدر كل حركة في كشف حسابه">🔎</button></td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">مفيش عملاء — ضيفهم يدوي أو استوردهم من قيود</td></tr>'}
-    </table></div>
-    ${list.length > 200 ? '<p class="muted mt">معروض أول 200 — استخدم البحث</p>' : ''}`;
+    </table></div>`;
 }
 
 A.custForm = (id) => {
