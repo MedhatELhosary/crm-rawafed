@@ -1328,6 +1328,7 @@ function adCustomers() {
     <div class="flex">
       <button class="btn" onclick="A.custForm()">➕ عميل جديد</button>
       <button class="btn ghost" onclick="A.importQoyod()">⬇️ استيراد عملاء قيود</button>
+      <button class="btn outline" onclick="A.dupForm()">🔀 العملاء المكررين</button>
       <button class="btn amber" onclick="A.plannerForm()">🗺️ تقسيم خط السير</button>
       <button class="btn outline" onclick="A.bulkTermsForm()">⏱️ مدة الاستحقاق لمجموعة</button>
       <button class="btn green" onclick="A.importForm('customers')">📥 استيراد/تحديث من ملف</button>
@@ -1446,6 +1447,99 @@ A.bulkTermsSave = async () => {
   toast('⏳ بطبق المدة وبعيد حساب المتأخرات...');
   try { const r = await api('bulkTerms', payload); toast(r.message, 'ok'); refresh(true); }
   catch (e) { toast(e.msg || 'خطأ', 'err'); }
+};
+
+// ----- العملاء المكررين (من تحويل العميل المحتمل + نسخة قيود) -----
+function dupLoc(c) {
+  return c.lat && c.lng
+    ? '<a href="https://maps.google.com/?q=' + encodeURIComponent(c.lat + ',' + c.lng) + '" target="_blank" rel="noopener">📍 لوكيشن</a>'
+    : '<span class="badge warm">من غير لوكيشن</span>';
+}
+function dupSide(title, c) {
+  return `<div class="card" style="margin:0;padding:10px">
+    <div class="muted" style="font-size:12px">${title}</div>
+    <b>${esc(c.name)}</b>
+    <div class="muted" style="font-size:12px">${esc(phoneOf(c.phone) || '—')} • ${esc(c.region || 'من غير منطقة')}${c.visit_day ? ' • ' + dayLabel(c.visit_day) : ''}</div>
+    <div style="font-size:12px">${dupLoc(c)} • ${c.refs} حركة</div></div>`;
+}
+A.dupForm = async () => {
+  toast('⏳ بيدوّر على العملاء المكررين...');
+  let r;
+  try { r = await api('duplicateCustomers', {}); }
+  catch (e) { return toast(e.msg || 'مقدرتش أجيب المكررين', 'err'); }
+  const why = by => by === 'phone' ? 'نفس التليفون' : 'نفس الاسم';
+  const pairCard = (p, i) => {
+    const both = p.dst.lat && p.dst.lng && p.src.lat && p.src.lng;
+    return `<div class="card">
+      <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" class="dup-ck" data-i="${i}" checked>
+        <b>ادمج</b> <span class="badge info">${why(p.by)}</span></label>
+      <div class="grid2 mt">${dupSide('عندنا (هيتمسح)', p.src)}${dupSide('من قيود #' + esc(p.dst.qoyod_id) + ' (هيفضل)', p.dst)}</div>
+      ${both ? `<div class="mt" style="font-size:13px">الاتنين ليهم لوكيشن مختلف — يفضل أنهي؟
+        <label style="display:inline;margin:0 8px"><input type="radio" name="dup-loc-${i}" value="dst" checked> بتاع قيود</label>
+        <label style="display:inline;margin:0 8px"><input type="radio" name="dup-loc-${i}" value="src"> بتاعنا</label></div>` : ''}
+    </div>`;
+  };
+  const unsureCard = (u, i) => `<div class="card">
+      <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" class="dup-uk" data-i="${i}">
+        <b>ادمج في</b> <span class="badge warm">${why(u.by)} — أكتر من عميل في قيود</span></label>
+      <div class="grid2 mt">${dupSide('عندنا (هيتمسح)', u.src)}
+        <div><select class="dup-us" data-i="${i}">${u.options.map(o =>
+          `<option value="${esc(o.id)}">${esc(o.name)} — قيود #${esc(o.qoyod_id)} (${o.refs} حركة)</option>`).join('')}</select></div></div>
+    </div>`;
+  A._dup = r;
+  openModal(`
+    <h2>🔀 العملاء المكررين</h2>
+    <p class="modal-sub">عميل عندنا من غير رقم قيود (غالبًا اتحول من عميل محتمل) وليه نسخة جت من قيود.
+      الدمج بيخلّي نسخة قيود باسمها وتليفونها ورقمها، وبينقلها كل الزيارات والتحصيلات والطلبات والمتابعات،
+      وبياخد المنطقة ويوم الزيارة واللوكيشن من نسختنا لو ناقصين — وبعدين نسختنا بتتمسح.
+      قبل الدمج بتتاخد نسخة احتياطية. الرصيد وكشف الحساب مبيتأثروش (بيتحسبوا برقم قيود).</p>
+    ${r.pairs.length ? r.pairs.map(pairCard).join('') : '<p class="muted">✅ مفيش عملاء مكررين</p>'}
+    ${r.unsure.length ? '<div class="section-title"><span>محتاجين تختار</span></div>' + r.unsure.map(unsureCard).join('') : ''}
+    ${r.pairs.length || r.unsure.length ? `<div class="flex mt">
+      <input id="dup-confirm" placeholder='اكتب "مسح" للتأكيد' style="max-width:200px">
+      <button class="btn red" onclick="A.dupMerge()">🔀 ادمج المختار</button></div>` : ''}
+    ${r.lost.length ? `<div class="section-title mt"><span>📍 لوكيشن ضاع ولسه محفوظ في العملاء المحتملين</span></div>
+      ${r.lost.map((x, i) => `<div class="card"><label style="display:flex;gap:8px;align-items:center;margin:0">
+        <input type="checkbox" class="dup-lk" data-i="${i}" checked> <b>${esc(x.customer.name)}</b>
+        <span class="muted">← من "${esc(x.lead.name)}"</span> ${dupLoc(x.lead)}</label></div>`).join('')}
+      <button class="btn green mt" onclick="A.dupRestore()">📍 رجّع اللوكيشن للمختارين</button>` : ''}
+    <div class="modal-actions"><button class="btn outline" onclick="A.closeModal()">إغلاق</button></div>`, null, true);
+};
+A.dupMerge = async () => {
+  const r = A._dup || { pairs: [], unsure: [] };
+  const pairs = [];
+  document.querySelectorAll('.dup-ck:checked').forEach(el => {
+    const p = r.pairs[Number(el.dataset.i)];
+    const loc = document.querySelector('input[name="dup-loc-' + el.dataset.i + '"]:checked');
+    pairs.push({ src: p.src.id, dst: p.dst.id, loc: loc ? loc.value : 'dst' });
+  });
+  document.querySelectorAll('.dup-uk:checked').forEach(el => {
+    const u = r.unsure[Number(el.dataset.i)];
+    const sel = document.querySelector('.dup-us[data-i="' + el.dataset.i + '"]');
+    pairs.push({ src: u.src.id, dst: sel.value, loc: 'dst' });
+  });
+  if (!pairs.length) return toast('اختار عميل واحد على الأقل', 'err');
+  const confirmWord = ($('#dup-confirm').value || '').trim();
+  if (confirmWord !== 'مسح') return toast('اكتب كلمة "مسح" للتأكيد', 'err');
+  toast('⏳ بياخد نسخة احتياطية وبيدمج ' + pairs.length + ' عميل...');
+  try {
+    const res = await api('mergeCustomers', { pairs: pairs, confirm: confirmWord }, { timeout: 180000 });
+    closeModal();
+    toast(res.message, 'ok');
+    refresh();
+  } catch (e) { toast(e.msg || 'الدمج مااتنفذش', 'err'); }
+};
+A.dupRestore = async () => {
+  const r = A._dup || { lost: [] };
+  const ids = [];
+  document.querySelectorAll('.dup-lk:checked').forEach(el => ids.push(r.lost[Number(el.dataset.i)].customer.id));
+  if (!ids.length) return toast('اختار عميل واحد على الأقل', 'err');
+  try {
+    const res = await api('restoreLeadLocations', { ids: ids });
+    toast(res.message, 'ok');
+    refresh(true);
+    A.dupForm();
+  } catch (e) { toast(e.msg || 'مااتنفذش', 'err'); }
 };
 
 A.importQoyod = async () => {
