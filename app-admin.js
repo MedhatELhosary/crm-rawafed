@@ -132,7 +132,11 @@ function adDash() {
   const visitsToday = visits.filter(v => String(v.date).slice(0, 10) === today && v.status === 'تمت');
   const visitsMonth = visits.filter(v => String(v.date).slice(0, 7) === month && v.status === 'تمت');
   const totalOverdue = customers.reduce((s, c) => s + (Number(c.overdue) || 0), 0);
-  const collectedMonth = (S.data.receipts || []).filter(r => String(r.date).slice(0, 7) === month).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  // سندات القبض من عملائنا بس — السند اللي جهته مش عميل عندنا سند دفع لمورد
+  const custQ = {};
+  customers.forEach(c => { if (c.qoyod_id) custQ[String(c.qoyod_id)] = 1; });
+  const collectedMonth = (S.data.receipts || []).filter(r => String(r.date).slice(0, 7) === month && custQ[String(r.qoyod_customer_id)])
+    .reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const visited = customers.filter(c => c.last_visit_date && (new Date() - new Date(c.last_visit_date)) / 86400000 <= 30).length;
   const coverage = customers.length ? Math.round(visited / customers.length * 100) : 0;
   const noLoc = customers.filter(c => !c.lat).length;
@@ -1881,12 +1885,260 @@ function adReports() {
       <button class="pill ${sub === 'visits' ? 'active' : ''}" onclick="A.repTab('visits')">📍 الزيارات</button>
       <button class="pill ${sub === 'regions' ? 'active' : ''}" onclick="A.repTab('regions')">🗺️ أداء المناطق</button>
       <button class="pill ${sub === 'customers' ? 'active' : ''}" onclick="A.repTab('customers')">👥 تفصيلي العملاء</button>
+      <button class="pill ${sub === 'analysis' ? 'active' : ''}" onclick="A.repTab('analysis')">📈 التحليل المالي</button>
       <button class="pill ${sub === 'files' ? 'active' : ''}" onclick="A.repTab('files')">📄 تصدير البيانات</button>
     </div>
     ${sub === 'regions' ? adRegions() : sub === 'customers' ? adCustReport()
-      : sub === 'files' ? adExportFiles() : adVisitsReport()}`;
+      : sub === 'analysis' ? adAnalysis() : sub === 'files' ? adExportFiles() : adVisitsReport()}`;
 }
 A.repTab = t => { S.repTab = t; render(); window.scrollTo(0, 0); };
+
+// ================== التحليل المالي (أعمار الذمم · المبيعات · التحصيلات) ==================
+// نفس أرقام ملف الإكسل — بتتحسب على السيرفر (analysisReport، Analysis.gs)
+const AN_COLORS = ['#2f6fed', '#16a34a', '#d97706', '#8b5cf6', '#64748b'];
+function anShort(n) {
+  const a = Math.abs(n);
+  if (a >= 1e6) return (n / 1e6).toFixed(a >= 1e7 ? 0 : 1) + ' م';
+  if (a >= 1e3) return Math.round(n / 1e3) + ' ألف';
+  return String(Math.round(n));
+}
+function anDM(d) { return String(d || '').slice(8, 10) + '/' + String(d || '').slice(5, 7); }
+function anPct(v) { return v === null || v === undefined || !isFinite(v) ? '—' : (Math.round(v * 10) / 10) + '%'; }
+function anGrowth(cur, prev) {
+  if (!prev) return '<span class="muted">—</span>';
+  const g = (cur / prev - 1) * 100;
+  return '<span class="badge ' + (g >= 0 ? 'cool' : 'hot') + '">' + (g >= 0 ? '▲ ' : '▼ ') + anPct(Math.abs(g)) + '</span>';
+}
+/** أعمدة رأسية (مجمّعة أو متراصّة) — SVG بسيط من غير مكتبات */
+function anBars(labels, series, stacked) {
+  const W = 760, H = 230, padL = 54, padB = 34, padT = 10, n = labels.length;
+  const totals = labels.map((_, i) => stacked ? series.reduce((s, x) => s + Math.max(0, x.values[i] || 0), 0)
+    : Math.max.apply(null, series.map(x => x.values[i] || 0)));
+  const max = Math.max(1, Math.max.apply(null, totals)) * 1.08;
+  const y = v => padT + (H - padT - padB) * (1 - v / max);
+  const slot = (W - padL - 6) / n, bw = stacked ? slot * 0.62 : slot * 0.8 / series.length;
+  let g = '';
+  for (let k = 0; k <= 4; k++) {
+    const v = max / 1.08 * k / 4, yy = y(v);
+    g += `<line x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}" stroke="#e3e8f0"/>` +
+      `<text x="${padL - 6}" y="${yy + 4}" font-size="10" text-anchor="end" fill="#6b7a90">${anShort(v)}</text>`;
+  }
+  labels.forEach((lb, i) => {
+    const x0 = padL + slot * i + (slot - (stacked ? bw : bw * series.length)) / 2;
+    let acc = 0;
+    series.forEach((s, j) => {
+      const v = Math.max(0, s.values[i] || 0);
+      if (!v) return;
+      const top = stacked ? y(acc + v) : y(v), bottom = stacked ? y(acc) : y(0);
+      const x = stacked ? x0 : x0 + j * bw;
+      g += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(0, bottom - top).toFixed(1)}" fill="${s.color}" rx="2"><title>${esc(lb)} — ${esc(s.name)}: ${money(s.values[i])}</title></rect>`;
+      acc += v;
+    });
+    if (n <= 12 || i % 2 === 0) {
+      g += `<text x="${(padL + slot * i + slot / 2).toFixed(1)}" y="${H - padB + 14}" font-size="10" text-anchor="middle" fill="#6b7a90">${esc(lb.slice(2))}</text>`;
+    }
+  });
+  const legend = series.map(s => `<span style="display:inline-flex;align-items:center;gap:5px;margin-left:12px;font-size:12px">
+    <i style="width:10px;height:10px;border-radius:2px;background:${s.color};display:inline-block"></i>${esc(s.name)}</span>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;direction:ltr" role="img">${g}</svg><div class="mt">${legend}</div>`;
+}
+/** أعمدة أفقية بالـ HTML (للترتيبات) */
+function anHBars(items, color) {
+  const max = Math.max(1, Math.max.apply(null, items.map(x => x.value)));
+  return items.map(x => `<div style="margin:6px 0">
+    <div style="display:flex;justify-content:space-between;font-size:12.5px;gap:8px"><span>${x.label}</span><b>${money(x.value)}</b></div>
+    <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden">
+      <i style="display:block;height:100%;width:${Math.max(1, x.value / max * 100).toFixed(1)}%;background:${x.color || color || 'var(--blue)'};border-radius:4px"></i></div></div>`).join('');
+}
+function adAnalysis() {
+  const r = S.an;
+  const tab = S.anTab || 'overview';
+  if (!r && !S.anLoading && !S.anErr) setTimeout(() => A.loadAnalysis(), 0);
+  const head = `
+    <div class="card">
+      <h3>📈 التحليل المالي</h3>
+      <div style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap">
+        <div><label>حتى تاريخ</label><input type="date" id="an-date" value="${esc((r && r.date) || S.anDate || todayISO())}" style="width:170px"></div>
+        <button class="btn" onclick="A.loadAnalysis(true)">🔄 حدّث</button>
+      </div>
+      <p class="muted mt" style="font-size:12.5px">كل المبالغ بالريال شاملة الضريبة · المسودات مش محسوبة · التحصيلات = سندات القبض
+        من العملاء بس (سندات الدفع للموردين مش داخلة)${r && r.syncStatus ? ' · آخر مزامنة مع قيود: ' + esc(r.syncStatus) : ''}</p>
+    </div>
+    <div class="pill-row">
+      ${[['overview', '📊 نظرة عامة'], ['aging', '⏳ أعمار الذمم'], ['sales', '🧾 المبيعات'], ['coll', '💰 التحصيلات']].map(([k, t]) =>
+        `<button class="pill ${tab === k ? 'active' : ''}" onclick="A.anTab('${k}')">${t}</button>`).join('')}
+    </div>`;
+  if (S.anErr && !r) return head + `<div class="empty"><div class="big">⚠️</div>${esc(S.anErr)}<br>
+    <button class="btn mt" onclick="A.loadAnalysis(true)">حاول تاني</button></div>`;
+  if (!r) return head + '<div class="empty"><div class="big">⏳</div>بيحسب الأرقام...</div>';
+  return head + (tab === 'aging' ? anAging(r) : tab === 'sales' ? anSales(r) : tab === 'coll' ? anColl(r) : anOverview(r));
+}
+A.anTab = t => { S.anTab = t; render(); };
+A.loadAnalysis = async (force) => {
+  if (S.anLoading) return;
+  const el = document.getElementById('an-date');
+  const date = (el && el.value) || S.anDate || todayISO();
+  S.anDate = date; S.anLoading = true; S.anErr = '';
+  if (force) { S.an = null; render(); }
+  try { S.an = await api('analysisReport', { date: date }, { quiet: true, timeout: 180000 }); }
+  catch (e) { S.anErr = e.msg || 'مقدرتش أحسب التقرير — جرب تاني'; }
+  S.anLoading = false;
+  if (S.adminTab === 'reports' && S.repTab === 'analysis') bgRender();
+};
+
+function anOverview(r) {
+  const k = r.kpis, a = r.aging;
+  const topRegion = a.rows.slice().sort((x, y) => y.overdue - x.overdue)[0];
+  const allCust = [].concat.apply([], a.rows.map(x => x.list.map(c => Object.assign({ region: x.region }, c))));
+  const top10 = allCust.slice().sort((x, y) => y.overdue - x.overdue).slice(0, 10).filter(c => c.overdue > 0);
+  const top10Sum = top10.reduce((s, c) => s + c.overdue, 0);
+  const last12 = r.monthly.slice(-12);
+  return `
+    <div class="kpi-grid">
+      <div class="kpi"><div class="num">${money(k.receivable)}</div><div class="lbl">المديونية المستحقة — على ${k.receivableCustomers} عميل</div></div>
+      <div class="kpi"><div class="num" style="color:var(--red)">${money(k.overdue)}</div><div class="lbl">المتأخر — ${anPct(k.receivable ? k.overdue / k.receivable * 100 : null)} من المديونية</div></div>
+      <div class="kpi"><div class="num" style="color:var(--red)">${money(k.a90p)}</div><div class="lbl">متأخر أكتر من 90 يوم — ${anPct(k.overdue ? k.a90p / k.overdue * 100 : null)} من المتأخر</div></div>
+      <div class="kpi"><div class="num">${k.dso === null ? '—' : k.dso}</div><div class="lbl">متوسط أيام التحصيل (يوم)</div></div>
+      <div class="kpi"><div class="num">${money(k.ytdNet)}</div><div class="lbl">صافي مبيعات ${r.year} لحد ${anDM(r.date)} ${anGrowth(k.ytdNet, k.lyNet)}</div></div>
+      <div class="kpi"><div class="num" style="color:var(--green)">${money(k.ytdColl)}</div><div class="lbl">تحصيلات ${r.year} لحد ${anDM(r.date)} ${anGrowth(k.ytdColl, k.lyColl)}</div></div>
+      <div class="kpi"><div class="num">${anPct(k.collectionRate)}</div><div class="lbl">نسبة التحصيل (التحصيل ÷ صافي المبيعات)</div>
+        <div class="bar"><i style="width:${Math.min(100, k.collectionRate || 0)}%"></i></div></div>
+      <div class="kpi"><div class="num">${k.activeCustomers}</div><div class="lbl">عملاء اشتروا في آخر 90 يوم — من ${k.totalCustomers}</div></div>
+    </div>
+    <div class="card" style="background:var(--blue-soft)">
+      <b>💡 ملاحظات من الأرقام</b>
+      <ul style="margin:8px 0 0;padding-right:18px;line-height:1.9">
+        ${topRegion && topRegion.overdue > 0 ? `<li>أكبر منطقة في المتأخرات: <b>${esc(topRegion.region)}</b> — ${money(topRegion.overdue)} (${anPct(k.overdue ? topRegion.overdue / k.overdue * 100 : null)} من المتأخر)</li>` : ''}
+        <li>المتأخر أكتر من 90 يوم = <b>${anPct(k.overdue ? k.a90p / k.overdue * 100 : null)}</b> من المتأخرات — دي أصعب ديون في التحصيل</li>
+        ${top10.length ? `<li>أكبر ${top10.length} عملاء عليهم <b>${anPct(k.overdue ? top10Sum / k.overdue * 100 : null)}</b> من كل المتأخرات</li>` : ''}
+        <li>صافي المبيعات ${anGrowth(k.ytdNet, k.lyNet)} والتحصيلات ${anGrowth(k.ytdColl, k.lyColl)} عن نفس الفترة من ${r.year - 1}</li>
+      </ul>
+    </div>
+    <div class="card"><b>صافي المبيعات والتحصيلات — آخر 12 شهر</b>
+      ${anBars(last12.map(m => m.month), [
+        { name: 'صافي المبيعات', color: AN_COLORS[0], values: last12.map(m => m.net) },
+        { name: 'التحصيلات', color: AN_COLORS[1], values: last12.map(m => m.coll) }])}</div>
+    <div class="grid2">
+      <div class="card"><b>المتأخرات حسب العمر</b>
+        ${anHBars([['1-30 يوم', a.total.a30, 'var(--amber)'], ['31-60 يوم', a.total.a60, '#ea580c'], ['61-90 يوم', a.total.a90, '#dc2626'],
+          ['أكتر من 90 يوم', a.total.a90p, '#991b1b']].map(x => ({ label: x[0], value: x[1], color: x[2] })))}</div>
+      <div class="card"><b>المديونية والمتأخر حسب المنطقة</b>
+        ${a.rows.filter(x => x.receivable || x.overdue).map((x, i) => `<div class="mt"><b style="font-size:13px">${esc(x.region)}</b>
+          ${anHBars([{ label: 'المستحق', value: x.receivable, color: AN_COLORS[i % AN_COLORS.length] },
+                     { label: 'المتأخر', value: x.overdue, color: 'var(--red)' }])}</div>`).join('')}</div>
+    </div>
+    <div class="card"><b>أكبر 10 عملاء في المتأخرات</b>
+      ${anHBars(top10.map(c => ({ label: esc(c.name) + ' <span class="muted">— ' + esc(c.region) + '</span>', value: c.overdue, color: 'var(--red)' })))}</div>`;
+}
+
+function anAging(r) {
+  const a = r.aging;
+  if (!a.rows.length) return '<div class="empty"><div class="big">🗺️</div>مفيش مناطق متسجلة</div>';
+  const reg = S.anReg && a.rows.some(x => x.region === S.anReg) ? S.anReg : a.rows[0].region;
+  const cur = a.rows.find(x => x.region === reg);
+  const seg = x => {
+    const t = x.a30 + x.a60 + x.a90 + x.a90p;
+    if (!t) return '';
+    return `<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;margin-top:4px">${[['a30', 'var(--amber)'], ['a60', '#ea580c'], ['a90', '#dc2626'], ['a90p', '#991b1b']]
+      .map(([kk, c]) => `<i title="${money(x[kk])}" style="width:${(x[kk] / t * 100).toFixed(1)}%;background:${c}"></i>`).join('')}</div>`;
+  };
+  const row = (x, tot) => `<tr${tot ? ' style="font-weight:800;background:var(--blue-soft)"' : ''}>
+    <td>${tot ? 'الإجمالي' : esc(x.region)}${tot ? '' : seg(x)}</td><td>${x.customers}</td><td>${money(x.receivable)}</td>
+    <td>${money(x.credit)}</td><td>${money(x.notDue)}</td><td>${money(x.a30)}</td><td>${money(x.a60)}</td><td>${money(x.a90)}</td>
+    <td style="color:${x.a90p > 0 ? 'var(--red)' : 'inherit'}">${money(x.a90p)}</td><td><b>${money(x.overdue)}</b></td>
+    <td>${anPct(x.receivable ? x.overdue / x.receivable * 100 : null)}</td></tr>`;
+  const daysBadge = d => d === null || d === undefined ? '<span class="muted">—</span>'
+    : '<span class="badge ' + (d > 120 ? 'hot' : d > 60 ? 'warm' : 'cool') + '">' + d + '</span>';
+  return `
+    <div class="card"><b>ملخص حسب المنطقة</b>
+      <p class="muted" style="font-size:12px">المتأخر بيتحسب من تاريخ استحقاق كل فاتورة (تاريخها + مدة استحقاق العميل) · الشريط: 🟨 1-30 · 🟧 31-60 · 🟥 61-90 · ⬛ +90</p>
+      <div class="table-wrap"><table>
+        <tr><th>المنطقة</th><th>عملاء عليهم رصيد</th><th>المستحق</th><th>أرصدة دائنة</th><th>لسه مااستحقش</th><th>1-30</th><th>31-60</th><th>61-90</th><th>+90</th><th>إجمالي المتأخر</th><th>% المتأخر</th></tr>
+        ${a.rows.map(x => row(x)).join('')}${row(a.total, true)}
+      </table></div></div>
+    <div class="pill-row">${a.rows.map((x, i) => `<button class="pill ${x.region === reg ? 'active' : ''}" onclick="A.anReg(${i})">${esc(x.region)} (${x.list.length})</button>`).join('')}</div>
+    <div class="card"><b>${esc(reg)} — ${cur.list.length} عميل رصيدهم مش صفر</b>
+      <div class="table-wrap mt"><table>
+        <tr><th>العميل</th><th>الرصيد</th><th>لسه مااستحقش</th><th>1-30</th><th>31-60</th><th>61-90</th><th>+90</th><th>المتأخر</th><th>آخر سداد</th><th>أيام من آخر سداد</th><th>آخر فاتورة</th><th></th></tr>
+        ${cur.list.map(c => `<tr>
+          <td><b>${esc(c.name)}</b>${c.phone ? '<div class="muted" style="font-size:11.5px">' + esc(phoneOf(c.phone)) + '</div>' : ''}</td>
+          <td>${money(c.balance)}</td><td>${money(c.notDue)}</td><td>${money(c.a30)}</td><td>${money(c.a60)}</td><td>${money(c.a90)}</td>
+          <td style="color:${c.a90p > 0 ? 'var(--red)' : 'inherit'};font-weight:${c.a90p > 0 ? 800 : 400}">${money(c.a90p)}</td>
+          <td><b>${money(c.overdue)}</b></td><td>${esc(c.lastPay || '—')}</td><td>${daysBadge(c.sincePay)}</td><td>${esc(c.lastInv || '—')}</td>
+          <td><button class="btn sm outline" onclick="A.statement('${esc(c.id)}')" title="كشف الحساب">📄</button></td></tr>`).join('')}
+        <tr style="font-weight:800;background:var(--blue-soft)"><td>إجمالي ${esc(reg)}</td>
+          ${['balance', 'notDue', 'a30', 'a60', 'a90', 'a90p', 'overdue'].map(kk => '<td>' + money(cur.list.reduce((s, c) => s + c[kk], 0)) + '</td>').join('')}
+          <td colspan="4"></td></tr>
+      </table></div></div>`;
+}
+A.anReg = i => { const x = S.an && S.an.aging.rows[i]; if (x) { S.anReg = x.region; render(); } };
+
+function anYearTable(r, field, spanCur, spanPrev, withRate) {
+  const years = r.yearly.map(y => y.year);
+  const regs = r.regions;
+  const cell = (yy, reg) => { const y = r.yearly.find(z => z.year === yy); return reg ? (y.byReg[reg] || {})[field] || 0 : y[field]; };
+  const sp = (reg, k) => reg ? (r.regSpan[reg] || {})[k] || 0 : regs.reduce((s, g) => s + ((r.regSpan[g] || {})[k] || 0), 0);
+  const line = (reg, tot) => `<tr${tot ? ' style="font-weight:800;background:var(--blue-soft)"' : ''}><td>${tot ? 'الإجمالي' : esc(reg)}</td>
+    ${years.map(yy => '<td>' + money(cell(yy, tot ? null : reg)) + '</td>').join('')}
+    <td><b>${money(sp(tot ? null : reg, spanCur))}</b></td><td>${money(sp(tot ? null : reg, spanPrev))}</td>
+    <td>${anGrowth(sp(tot ? null : reg, spanCur), sp(tot ? null : reg, spanPrev))}</td></tr>`;
+  const rate = withRate ? `<tr style="background:var(--blue-soft)"><td><b>نسبة التحصيل</b></td>
+    ${years.map(yy => { const y = r.yearly.find(z => z.year === yy); return '<td>' + anPct(y.net > 0 ? y.coll / y.net * 100 : null) + '</td>'; }).join('')}
+    <td><b>${anPct(r.kpis.collectionRate)}</b></td><td>${anPct(r.kpis.lyNet > 0 ? r.kpis.lyColl / r.kpis.lyNet * 100 : null)}</td><td></td></tr>` : '';
+  return `<div class="table-wrap"><table>
+    <tr><th>المنطقة</th>${years.map(yy => '<th>' + yy + (yy === years[0] ? ' <span class="muted">(من أول البيانات)</span>' : '') + '</th>').join('')}
+      <th>${r.year} لحد ${anDM(r.date)}</th><th>نفس الفترة ${r.year - 1}</th><th>النمو</th></tr>
+    ${regs.map(g => line(g)).join('')}${line(null, true)}${rate}</table></div>`;
+}
+
+function anSales(r) {
+  const regs = r.regions;
+  const tot = k => r.monthly.reduce((s, m) => s + m[k], 0);
+  const grandNet = r.kpis.ytdNet;
+  return `
+    <div class="card"><b>صافي المبيعات شهريًا حسب المنطقة — آخر 24 شهر</b>
+      ${anBars(r.monthly.map(m => m.month), regs.map((g, i) => ({ name: g, color: AN_COLORS[i % AN_COLORS.length], values: r.monthly.map(m => m.byReg[g] || 0) })), true)}</div>
+    <div class="card"><b>مقارنة سنوية (صافي المبيعات)</b>${anYearTable(r, 'net', 'ytdNet', 'lyNet')}</div>
+    <div class="card"><b>أكبر 15 عميل — صافي مبيعات ${r.year} لحد ${anDM(r.date)}</b>
+      <div class="table-wrap mt"><table>
+        <tr><th>#</th><th>العميل</th><th>المنطقة</th><th>صافي ${r.year}</th><th>نفس الفترة ${r.year - 1}</th><th>النمو</th><th>من الإجمالي</th></tr>
+        ${r.topSales.map((c, i) => `<tr><td>${i + 1}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.region)}</td><td><b>${money(c.ytd)}</b></td>
+          <td>${money(c.ly)}</td><td>${anGrowth(c.ytd, c.ly)}</td><td>${anPct(grandNet ? c.ytd / grandNet * 100 : null)}</td></tr>`).join('')}
+      </table></div></div>
+    <div class="card"><b>التفاصيل الشهرية</b>
+      <div class="table-wrap mt"><table>
+        <tr><th>الشهر</th>${regs.map(g => '<th>' + esc(g) + '</th>').join('')}<th>إجمالي المبيعات</th><th>المرتجعات</th><th>صافي المبيعات</th><th>عدد الفواتير</th></tr>
+        ${r.monthly.slice().reverse().map(m => `<tr><td>${esc(m.month)}</td>${regs.map(g => '<td>' + money(m.byReg[g] || 0) + '</td>').join('')}
+          <td>${money(m.gross)}</td><td style="color:var(--red)">${money(m.returns)}</td><td><b>${money(m.net)}</b></td><td>${m.invoices}</td></tr>`).join('')}
+        <tr style="font-weight:800;background:var(--blue-soft)"><td>الإجمالي</td>${regs.map(g => '<td>' + money(r.monthly.reduce((s, m) => s + (m.byReg[g] || 0), 0)) + '</td>').join('')}
+          <td>${money(tot('gross'))}</td><td>${money(tot('returns'))}</td><td>${money(tot('net'))}</td><td>${tot('invoices')}</td></tr>
+      </table></div></div>`;
+}
+
+function anColl(r) {
+  const regs = r.regions;
+  const tot = k => r.monthly.reduce((s, m) => s + m[k], 0);
+  return `
+    <div class="card"><b>التحصيلات مقابل صافي المبيعات — آخر 24 شهر</b>
+      ${anBars(r.monthly.map(m => m.month), [
+        { name: 'صافي المبيعات', color: AN_COLORS[0], values: r.monthly.map(m => m.net) },
+        { name: 'التحصيلات', color: AN_COLORS[1], values: r.monthly.map(m => m.coll) }])}</div>
+    <div class="card"><b>مقارنة سنوية (التحصيلات)</b>${anYearTable(r, 'coll', 'ytdColl', 'lyColl', true)}</div>
+    <div class="card"><b>أكبر 15 عميل في التحصيل — ${r.year} لحد ${anDM(r.date)}</b>
+      <div class="table-wrap mt"><table>
+        <tr><th>#</th><th>العميل</th><th>المنطقة</th><th>تحصيل ${r.year}</th><th>نفس الفترة ${r.year - 1}</th><th>النمو</th><th>رصيده الحالي</th></tr>
+        ${r.topColl.map((c, i) => `<tr><td>${i + 1}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.region)}</td><td><b>${money(c.collYtd)}</b></td>
+          <td>${money(c.collLy)}</td><td>${anGrowth(c.collYtd, c.collLy)}</td><td>${money(c.balance)}</td></tr>`).join('')}
+      </table></div></div>
+    <div class="card"><b>التفاصيل الشهرية</b>
+      <div class="table-wrap mt"><table>
+        <tr><th>الشهر</th>${regs.map(g => '<th>' + esc(g) + '</th>').join('')}<th>إجمالي التحصيلات</th><th>عدد السندات</th><th>صافي المبيعات</th><th>نسبة التحصيل</th></tr>
+        ${r.monthly.slice().reverse().map(m => `<tr><td>${esc(m.month)}</td>${regs.map(g => '<td>' + money(m.collByReg[g] || 0) + '</td>').join('')}
+          <td><b>${money(m.coll)}</b></td><td>${m.receipts}</td><td>${money(m.net)}</td><td>${anPct(m.net > 0 ? m.coll / m.net * 100 : null)}</td></tr>`).join('')}
+        <tr style="font-weight:800;background:var(--blue-soft)"><td>الإجمالي</td>${regs.map(g => '<td>' + money(r.monthly.reduce((s, m) => s + (m.collByReg[g] || 0), 0)) + '</td>').join('')}
+          <td>${money(tot('coll'))}</td><td>${tot('receipts')}</td><td>${money(tot('net'))}</td><td>${anPct(tot('net') > 0 ? tot('coll') / tot('net') * 100 : null)}</td></tr>
+      </table></div></div>`;
+}
 
 function adExportFiles() {
   return `

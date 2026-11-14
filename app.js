@@ -363,7 +363,7 @@ var READ_ACTIONS = {
   followups: 1, followupsAdmin: 1, getAttachment: 1, bankUnmatched: 1,
   expenseReport: 1, expensesToPush: 1, statementAudit: 1, visitsReport: 1,
   visitIssues: 1, regionsReport: 1, customersReport: 1, invoiceDetailProbe: 1,
-  scorecard: 1, login: 1, renew: 1
+  scorecard: 1, analysisReport: 1, login: 1, renew: 1
 };
 
 /**
@@ -390,7 +390,7 @@ var NET_BACKOFF = [900, 2500];
 var SLOW_ACTIONS = {
   // التقارير: قياس فعلي على السيرفر 12–34 ثانية. كانت بتتقطع عند 40
   // ثانية وتتعاد مرتين، فالمستخدم يستنى دقيقتين ويشوف خطأ في الآخر.
-  customersReport: 1, regionsReport: 1, dailyReport: 1, scorecard: 1,
+  customersReport: 1, regionsReport: 1, dailyReport: 1, scorecard: 1, analysisReport: 1,
   visitsReport: 1, statementAudit: 1, overdueBreakdown: 1, visitIssues: 1,
   diagnose: 1, invoiceDetailProbe: 1, expenseReport: 1, leaderboard: 1,
   backupNow: 1, archiveNow: 1, syncProducts: 1, runQoyodSync: 1, pushPending: 1,
