@@ -1625,6 +1625,7 @@ function viewToday() {
       <button class="btn" onclick="A.checkoutForm()">إنهاء الزيارة وكتابة التقرير ←</button>
     </div>`;
   }
+  if (hrEnabled()) html += `<button class="btn green full" onclick="A.openHr()">⏱️ الحضور والإجازات</button>`;
   // المتابعات المستحقة بتظهر فوق خالص — أول حاجة يشوفها المندوب
   if (!S.fu) A.loadFollowups();
   const due = S.fu ? S.fu.late.concat(S.fu.today) : [];
@@ -2383,6 +2384,13 @@ A.readAll = async () => {
   S.data.notifications = [];
   render();
   try { await api('markNotifRead', { ids }); } catch (e) {}
+};
+
+// backend/Hr.gs
+const hrEnabled = () => ((S.data && S.data.settings) || {}).HR_ENABLED === 'TRUE';
+A.openHr = async (go) => {
+  try { location.href = (await api('hrLink', { go: go || 'home' })).url; }
+  catch (e) { toast(e.msg || 'محتاج نت', 'err'); }
 };
 
 // ----- حسابي -----
