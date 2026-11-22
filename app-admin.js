@@ -3063,6 +3063,15 @@ function adSettings() {
       <p class="muted mt">كل مندوب يبعت للبوت: <b style="direction:ltr">/start اسم_الدخول_بتاعه</b> — وهيوصله خطة يومه كل صبح 7:00.</p>
     </div>
     <div class="card">
+      <h3>⏱️ ربط نظام الحضور والإجازات</h3>
+      <label>رابط بوابة الحضور</label><input id="s-hr-url" value="${esc(s.HR_PORTAL_URL || '')}" style="direction:ltr"
+        placeholder="https://script.google.com/macros/s/.../exec">
+      <label>مفتاح الربط (من شيت الحضور: قايمة "ربط الـ CRM")</label><input id="s-hr-key" value="${esc(s.HR_LINK_SECRET || '')}" style="direction:ltr">
+      <p class="muted mt">بعد الحفظ بيظهر زرار "الحضور والإجازات" لكل المستخدمين، ويفتح البوابة وهو داخل على طول.
+        الموارد البشرية بتكتب رقم كل مستخدم في ملف الموظف (خانة "رقم المستخدم في الـ CRM"). رقمك إنت: <b style="direction:ltr">${esc(S.user.id || '')}</b></p>
+      ${s.HR_PORTAL_URL && s.HR_LINK_SECRET ? '<div class="flex mt"><button class="btn ghost" onclick="A.openHr(\'home\')">افتح بوابة الحضور ←</button></div>' : ''}
+    </div>
+    <div class="card">
       <h3>👤 حسابي</h3>
       <div class="stat-line"><span>الاسم</span><b>${esc(S.user.name)}</b></div>
       <div class="stat-line"><span>اسم الدخول</span><b style="direction:ltr">${esc(S.user.username || '')}</b></div>
@@ -3234,6 +3243,7 @@ function adSettings() {
 A.saveSettings = async () => {
   const data = {
     QOYOD_API_KEY: $('#s-qoyod').value.trim(), TELEGRAM_BOT_TOKEN: $('#s-tg').value.trim(),
+    HR_PORTAL_URL: $('#s-hr-url').value.trim(), HR_LINK_SECRET: $('#s-hr-key').value.trim(),
     GEOFENCE_METERS: $('#s-geo').value, VISIT_GAP_DAYS: $('#s-gap').value,
     OVERDUE_ALERT_MIN: $('#s-overdue').value, COMPANY_NAME: $('#s-company').value.trim(),
     PRIO_BIG_OVERDUE: normDigits($('#s-prio-big').value) || '5000',
