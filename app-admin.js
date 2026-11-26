@@ -23,10 +23,28 @@ function viewAdmin() {
   }[S.adminTab]();
   return topbar('لوحة تحكم الأدمن') +
     '<div class="admin-tabs">' + tabs.map(t =>
-      `<button class="${S.adminTab === t[0] ? 'active' : ''}" onclick="A.adminTab('${t[0]}')">${t[1]}</button>`).join('') + '</div>' +
+      `<button class="${S.adminTab === t[0] ? 'active' : ''}" onclick="A.adminTab('${t[0]}')">${t[1]}</button>`).join('') +
+    (adHrOn() ? '<button onclick="A.adOpenHr()">⏱️ الحضور والإجازات ↗</button>' : '') + '</div>' +
     '<div class="page">' + body + '</div>';
 }
 A.adminTab = t => { S.adminTab = t; render(); window.scrollTo(0, 0); };
+
+// الحضور والإجازات (backend/Hr.gs): الأدمن بيدخل البوابة بحسابه كمدير (موافقات الفريق والنظرة العامة)
+function adHrOn() {
+  const s = (S.data && S.data.allSettings) || {};
+  return hrEnabled() || (!!s.HR_PORTAL_URL && !!s.HR_LINK_SECRET);
+}
+/** للأدمن في تاب جديد عشان اللوحة تفضل مفتوحة — التاب بيتفتح قبل النداء عشان المتصفح مايمنعوش */
+A.adOpenHr = async () => {
+  const w = window.open('', '_blank');
+  try {
+    const r = await api('hrLink', { go: 'home' }, { label: 'بنفتح الحضور والإجازات...' });
+    if (w) w.location.href = r.url; else location.href = r.url;
+  } catch (e) {
+    if (w) w.close();
+    toast(e.msg || e.fatal || (e.offline ? 'محتاج نت عشان تفتح الحضور والإجازات' : 'معرفناش نفتح الحضور والإجازات'), 'err');
+  }
+};
 
 function regionName(id) {
   const r = (S.data.regions || []).find(x => String(x.id) === String(id));
@@ -3069,7 +3087,7 @@ function adSettings() {
       <label>مفتاح الربط (من شيت الحضور: قايمة "ربط الـ CRM")</label><input id="s-hr-key" value="${esc(s.HR_LINK_SECRET || '')}" style="direction:ltr">
       <p class="muted mt">بعد الحفظ بيظهر زرار "الحضور والإجازات" لكل المستخدمين، ويفتح البوابة وهو داخل على طول.
         الموارد البشرية بتكتب رقم كل مستخدم في ملف الموظف (خانة "رقم المستخدم في الـ CRM"). رقمك إنت: <b style="direction:ltr">${esc(S.user.id || '')}</b></p>
-      ${s.HR_PORTAL_URL && s.HR_LINK_SECRET ? '<div class="flex mt"><button class="btn ghost" onclick="A.openHr(\'home\')">افتح بوابة الحضور ←</button></div>' : ''}
+      ${s.HR_PORTAL_URL && s.HR_LINK_SECRET ? '<div class="flex mt"><button class="btn ghost" onclick="A.adOpenHr()">افتح بوابة الحضور ↗</button></div>' : ''}
     </div>
     <div class="card">
       <h3>👤 حسابي</h3>
